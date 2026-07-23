@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>家庭帳本儀表板</title>
+<!-- ═══════════════════════════════════════════════════════════════════
+     家庭帳本儀表板 v2（2026-07-23 重寫，可公開部署版）
+     設計要點：
+     1. 無任何邀請碼／家庭識別碼寫死值：登入後查 household_members 取得
+        household_id；非成員只顯示提示訊息，不提供加入功能（加入請用手機 App）。
+     2. 不用舊 RPC：直接 SELECT 資料表（RLS 保護），客戶端重現 App 的
+        記帳語意（unique 才計入、exclude_state 三態、排除優先序、分類 cascade、
+        kind=invest/transfer 不計收支）。本頁為「簡化規則」，完整判定以 App 為準
+        （未實作項目見頁尾說明）。
+     3. 月份查詢：伺服器端 gte+lt 之外，客戶端再夾一次邊界（歷史教訓：
+        同欄位 gte+lt 上界曾失效，防禦性重複過濾）。
+     4. XSS：所有來自 DB 的字串一律以 textContent 寫入 DOM，全檔不使用 innerHTML。
+     5. ?demo=1：完全不連 Supabase（連 supabase-js 都不載入），以內建合成資料
+        渲染整頁，供部署前預覽。合成資料皆為虛構。
+     部署說明見同目錄 DEPLOY.md。⚠️ snapshot.html 含真實資料，絕不可部署。
+     ═══════════════════════════════════════════════════════════════════ -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root {
+    --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#8395a7;
+    --accent:#0abde3; --red:#ee5253; --green:#10ac84;
+    --line:#dfe4ea; --track:#f1f2f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#171b21; --card:#222a33; --ink:#e9eef3; --sub:#8fa1b3;
+      --line:#39434f; --track:#2d3641;
+    }
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:"Noto Sans TC",system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:20px; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+  h1 { font-size:22px; }
+  select,button { font:inherit; padding:8px 13px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border:none; }
+  button.nav { padding:8px 11px; }
+  .spacer { flex:1; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; }
+  .card { background:var(--card); border-radius:14px; padding:20px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  .card h2 { font-size:15px; color:var(--sub); margin-bottom:12px; }
+  .big { font-size:28px; font-weight:700; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; padding:6px 0; font-size:14px; }
+  .expense { color:var(--red); } .income { color:var(--green); }
+  .muted { color:var(--sub); font-size:13px; }
+  .warn { color:var(--red); font-size:13px; }
+  .bar { height:10px; border-radius:5px; background:var(--track); overflow:hidden; margin:4px 0 10px; }
+  .bar > div { height:100%; background:var(--green); }
+  .bar > div.over { background:var(--red); }
+  .center { max-width:420px; margin:80px auto; text-align:center; }
+  .center .card { padding:32px 24px; }
+  canvas { max-height:260px; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .chip { border-radius:999px; padding:6px 14px; font-size:13px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  .chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .badge { background:var(--accent); color:#fff; border-radius:6px; padding:3px 8px; font-size:12px; }
+  .exlist { max-height:300px; overflow-y:auto; }
+  .exrow { display:flex; gap:10px; align-items:baseline; padding:5px 0; font-size:13px; color:var(--sub); border-bottom:1px dashed var(--line); }
+  .exrow .d { flex:0 0 auto; }
+  .exrow .n { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .exrow .r { flex:0 0 auto; border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:11px; }
+  .exrow .a { flex:0 0 auto; text-decoration:line-through; }
+  .wide { margin-top:16px; }
+  footer { margin-top:20px; }
+  footer details { color:var(--sub); font-size:13px; }
+  footer summary { cursor:pointer; }
+  footer ul { margin:8px 0 0 20px; }
+  .err { color:var(--red); font-size:13px; min-height:18px; margin-top:10px; }
+  @media (max-width:420px) {
+    body { padding:12px; }
+    .grid { grid-template-columns:1fr; }
+    .big { font-size:24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 載入中 -->
+<div id="status" class="center">
+  <div class="card"><p id="statusMsg">載入中…</p></div>
+</div>
+
+<!-- 登入 -->
+<div id="login" class="center" hidden>
+  <div class="card">
+    <h1 style="margin-bottom:8px">🏠 家庭帳本</h1>
+    <p class="muted" style="margin-bottom:18px">唯讀儀表板：登入後檢視全家收支</p>
+    <button class="primary" style="width:100%" id="btnGoogle">使用 Google 登入</button>
+    <p class="err" id="loginErr"></p>
+  </div>
+</div>
+
+<!-- 非家庭成員 -->
+<div id="nomember" class="center" hidden>
+  <div class="card">
+    <h1 style="margin-bottom:12px">🏠 家庭帳本</h1>
+    <p>此帳號不是家庭成員，請先在手機 App 用邀請碼加入。</p>
+    <p class="muted" style="margin:10px 0 18px">加入後重新整理本頁即可。</p>
+    <button id="btnSignOut2">登出</button>
+  </div>
+</div>
+
+<!-- 錯誤 -->
+<div id="errorBox" class="center" hidden>
+  <div class="card">
+    <h1 style="margin-bottom:12px">😵 發生錯誤</h1>
+    <p class="warn" id="errorMsg" style="margin-bottom:18px"></p>
+    <button class="primary" id="btnRetry">重試</button>
+  </div>
+</div>
+
+<!-- 主畫面 -->
+<div id="app" hidden>
+  <header>
+    <h1>🏠 家庭帳本</h1>
+    <button class="nav" id="btnPrev" title="上個月">◀</button>
+    <select id="monthSel"></select>
+    <button class="nav" id="btnNext" title="下個月">▶</button>
+    <span class="spacer"></span>
+    <span id="demoBadge" class="badge" hidden>示範模式（合成資料）</span>
+    <span id="who" class="muted"></span>
+    <button id="btnSignOut" hidden>登出</button>
+  </header>
+
+  <div class="chips" id="chips"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>本月收支</h2>
+      <div class="row"><span>支出</span><span class="big expense" id="sumExp">—</span></div>
+      <div class="row"><span>收入</span><span class="big income" id="sumInc">—</span></div>
+      <div class="row"><span>淨支出</span><span class="big" id="sumNet">—</span></div>
+      <div class="row muted" style="border-top:1px dashed var(--line);margin-top:6px;padding-top:10px">
+        <span>投資/轉帳（不計收支）</span><span id="investLine">—</span>
+      </div>
+      <p class="warn" id="suspectHint" hidden></p>
+      <p class="muted" id="emptyHint" hidden>本月無資料</p>
+    </div>
+    <div class="card">
+      <h2>分類佔比</h2>
+      <canvas id="pie"></canvas>
+      <p class="muted" id="pieEmpty" hidden>本月無支出資料</p>
+    </div>
+    <div class="card">
+      <h2>近 6 月趨勢</h2>
+      <canvas id="trend"></canvas>
+    </div>
+    <div class="card">
+      <h2>預算進度</h2>
+      <div id="budgets" class="muted">—</div>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>已排除（未計入收支）</h2>
+    <div class="exlist" id="excludedList"></div>
+  </div>
+
+  <footer>
+    <details>
+      <summary>ℹ️ 關於本儀表板的計算規則</summary>
+      <p style="margin-top:8px">
+        本儀表板為<b>簡化規則</b>，逐筆管理與完整自動判定以 App 為準。
+        已重現：unique 才計入、手動排除/納入（exclude_state）、篩選器（filter_rules）、
+        商家排除規則（exclude_rules）、分類 cascade（篩選器 → 商家規則 → 內建關鍵字）、
+        自訂分類名稱與預算（category_labels）、投資/轉帳不計收支、
+        自動偵測子集（帳戶互轉同額配對、同帳戶進出相抵、與對帳單重複、信用卡退款/返還＋退款對消）。
+      </p>
+      <p style="margin-top:6px">App 有做、本頁<b>未實作</b>的自動判定規則：</p>
+      <ul>
+        <li>T 內部轉入／待確認收入（45 天翻案）</li>
+        <li>跨月寬窗（±5 天）配對</li>
+        <li>轉帳金額手續費容差（僅做同額配對）</li>
+        <li>訂閱偵測、前期比較、理財指標</li>
+      </ul>
+    </details>
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ═══════════ 基本設定 ═══════════ */
+// Supabase publishable key 出現在原始碼是官方設計（安全靠 RLS），不是洩漏。
+const SUPABASE_URL = "https://zdfhieekhaaqfarqpslc.supabase.co";
+const SUPABASE_KEY = "sb_publishable_jIw3eJ0CW-rmGL7b9Wh3XQ_cQMDIegf";
+const DEMO = new URLSearchParams(location.search).get("demo") === "1";
+
+const $ = id => document.getElementById(id);
+const fmt = n => "NT$ " + Number(n || 0).toLocaleString("zh-TW");
+const pad = n => String(n).padStart(2, "0");
+const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+// 保留給偶需字串插值處使用；本檔動態內容一律走 textContent，不用 innerHTML
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function clear(n){ n.replaceChildren(); }
+function dayDiff(a, b){ return Math.abs(new Date(a) - new Date(b)) / 86400000; }
+function ms(y, m){ return `${y}-${pad(m)}-01`; }                      // 月初 YYYY-MM-01
+function ymAdd(y, m, d){ const t = y * 12 + (m - 1) + d; return [Math.floor(t / 12), (t % 12) + 1]; }
+
+/* ═══════════ App 語意常數（與 App 原始碼逐字一致，順序有意義） ═══════════ */
+const STAT_CATS = [
+  ["📈 投資", ["普買", "普賣", "櫃買", "櫃賣", "股票款", "申購預扣-股票"]],
+  ["✈️ 旅遊", ["AGODA", "WAMAZING", "航空", "飯店", "HOTEL", "渡假"]],
+  ["🧾 稅務", ["綜所稅", "稅款"]],
+  ["🛡️ 保險", ["人壽", "保險"]],
+  ["💊 醫療", ["醫院", "醫學大學", "藥局", "診所"]],
+  ["🚗 交通", ["停車", "車旅", "中油", "eTag", "嘟嘟房", "高鐵", "優步", "計程", "車隊", "悠遊卡", "加油", "運匠", "ＱＴａｘｉ"]],
+  ["🛒 網購", ["蝦皮", "COUPANG", "ＣＯＵＰＡＮＧ", "酷澎", "TAOBAO", "淘寶", "ALP*"]],
+  ["💻 數位訂閱", ["GOOGLE", "ANTHROPIC", "NETFLIX", "APPLE.COM"]],
+  ["📱 電信", ["中華電信", "台灣大哥大", "遠傳", "ｍｙｆｏｎｅ"]],
+  ["🏠 水電燃氣", ["台電", "瓦斯", "自來水", "水費", "電費"]],
+  ["🧺 食品雜貨", ["全聯", "美廉社", "家樂福", "超商", "便利商店", "蔬果", "農產", "ＩＫＥＡ", "宜家", "三越", "百貨", "ＤＯＮＫＩ"]],
+  ["🍜 飲食", ["麥當勞", "壽司", "拉麵", "漢堡", "茶", "咖啡", "食堂", "雲集", "早安", "迷客夏", "得正", "冰品", "餐廳", "一蘭", "錢包統一"]],
+  ["💳 手續費", ["手續費", "申購手續", "匯費", "服務費", "帳管費"]]
+];
+const OTHER_CAT = "📦 其他";
+const AI_CATS = STAT_CATS.map(c => c[0]).concat([OTHER_CAT]);
+
+const INCOME_CATS = [
+  ["💰 薪資", ["薪", "薪資", "薪轉", "薪水", "代發", "獎金", "年終", "SALARY", "PAYROLL", "BONUS"]],
+  ["🏦 利息", ["利息", "存息", "結息", "活息", "INTEREST"]],
+  ["📈 配息", ["股息", "配息", "股利", "現金股利", "DIVIDEND"]],
+  ["📊 賣出", ["普賣", "櫃賣", "賣出", "交割", "股票款", "股票", "SELL"]],
+  ["↩️ 退款", ["退款", "退還", "退貨", "退刷", "退費", "返還", "折讓", "回饋", "REFUND", "CASHBACK"]],
+  ["🔁 轉入", ["轉入", "匯入", "轉帳", "存入", "匯款", "入帳", "TRANSFER", "ATM"]]
+];
+const OTHER_INCOME = "💵 其他收入";
+const TRUE_INCOME_CATS = ["💰 薪資", "🏦 利息", "📈 配息", "📊 賣出"];   // 規則 A 的真收入保護
+const REFUND_PROTECT_CATS = ["📊 賣出", "📈 配息", "🏦 利息"];           // 規則 B 的保護
+
+function statCategory(merchant){
+  const t = String(merchant || "").toLowerCase();
+  for (const [cat, kws] of STAT_CATS)
+    if (kws.some(k => t.includes(k.toLowerCase()))) return cat;
+  return OTHER_CAT;
+}
+function incomeCategory(text){
+  const t = String(text || "").toLowerCase();
+  for (const [cat, kws] of INCOME_CATS)
+    if (kws.some(k => t.includes(k.toLowerCase()))) return cat;
+  return OTHER_INCOME;
+}
+
+/* ═══════════ 全域狀態 ═══════════ */
+let sb = null;               // supabase client（demo 模式恆為 null）
+let hid = null;              // household_id
+let memberFilter = null;     // null=全家；否則 members.id
+let pieChart = null, trendChart = null;
+const ctx = {                // 語意引擎共用資料（live 由 DB 載入，demo 由合成資料填入）
+  members: [], accounts: [], labels: [], catRules: [], exclRules: [], filterRules: [],
+  txs: [], acctTxs: [],      // 已載入範圍內的交易（dedup_status != merged）與帳戶收支
+  loadedRange: null          // {start, end}，避免重複抓
+};
+
+/* ═══════════ 語意引擎（純函式，live/demo 共用） ═══════════ */
+function statSource(t){
+  const n = t.note || "";
+  if (n.startsWith("[申購")) return "申購（重建）";
+  if (n.startsWith("[email]")){
+    const s = n.slice(7).trim();
+    const i = s.indexOf("(");
+    return ((i >= 0 ? s.slice(0, i) : s).trim()) || t.source;
+  }
+  if (n.startsWith("[notification]")) return (t.merchant || "") + "·通知";
+  if (t.source === "manual") return "手動記帳";
+  return t.source;
+}
+function primaryMemberId(){
+  let best = null;
+  for (const m of ctx.members) if (!best || (m.sort_order ?? 0) < (best.sort_order ?? 0)) best = m;
+  return best ? best.id : null;
+}
+function txOwner(t){
+  if (t.family_member_id) return t.family_member_id;
+  if (t.member_id){ const m = ctx.members.find(x => x.user_id && x.user_id === t.member_id); if (m) return m.id; }
+  return null;
+}
+function assetOwner(accountId){
+  const a = ctx.accounts.find(x => x.id === accountId);
+  if (!a) return primaryMemberId();
+  if (a.member_id) return a.member_id;
+  const head = (a.name || "").split("·")[0];
+  const m = ctx.members.find(x => head.includes("(" + x.name + ")"));
+  return m ? m.id : primaryMemberId();
+}
+function nickOf(id){
+  const m = ctx.members.find(x => x.id === id);
+  return m ? (m.nickname || m.name || "成員") : "成員";
+}
+function acctName(accountId){
+  const a = ctx.accounts.find(x => x.id === accountId);
+  return a ? (a.display_name || a.name || "帳戶") : "帳戶";
+}
+function labelOf(key){
+  const l = ctx.labels.find(x => x.key === key);
+  return l ? l.label : key;
+}
+// filter_rules：active、priority 升冪、第一條全中者生效
+function matchFilterRule(merchant, note, source, amount, dir){
+  const hay = ((merchant || "") + " " + (note || "")).toLowerCase();
+  for (const r of ctx.filterRules){
+    if (r.kw && !hay.includes(r.kw.trim().toLowerCase())) continue;
+    if (r.account && !String(source || "").toLowerCase().includes(r.account.trim().toLowerCase())) continue;
+    if (r.amount_min != null && amount < r.amount_min) continue;
+    if (r.amount_max != null && amount > r.amount_max) continue;
+    if (r.direction && r.direction !== "any" && r.direction !== dir) continue;
+    return r;
+  }
+  return null;
+}
+// exclude_rules：先完全相等、再 contains（pattern 存庫時已小寫）
+function ruleExcludeState(text){
+  const s = String(text || "").trim().toLowerCase();
+  if (!s) return null;
+  const exact = ctx.exclRules.find(r => r.pattern === s);
+  if (exact) return exact.exclude_state;
+  const c = ctx.exclRules.find(r => r.pattern && s.includes(r.pattern));
+  return c ? c.exclude_state : null;
+}
+// category_rules：先完全相等、再 contains；ctx.catRules 已預排 user 優先於 ai
+function classifyByRules(merchant){
+  const m = String(merchant || "").trim().toLowerCase();
+  if (!m) return null;
+  const exact = ctx.catRules.find(r => r.merchant === m);
+  if (exact) return exact.category;
+  const c = ctx.catRules.find(r => r.merchant && m.includes(r.merchant));
+  return c ? c.category : null;
+}
+// 分類 cascade：filter_rules cat: → category_rules → STAT_CATS → 其他
+function classifyF(t){
+  const fr = matchFilterRule(t.merchant, t.note, statSource(t), Number(t.amount), t.kind === "income" ? "income" : "expense");
+  if (fr && String(fr.action || "").startsWith("cat:")) return fr.action.slice(4);
+  const byRule = classifyByRules(t.merchant);
+  if (byRule) return byRule;
+  return statCategory(t.merchant || "");
+}
+function isInvestSell(t){
+  return t.kind === "invest" && ((t.merchant || "").includes("賣") || (t.merchant || "").toUpperCase().includes("SELL"));
+}
+
+// 自動偵測（子集）：A 帳戶互轉同額配對 → A2 同帳戶進出相抵 → C 跨表重複 → B 退款/返還＋對消
+// 輸入順序＝occurred_at DESC；貪婪一對一配對；後面規則跳過已標掉的筆
+function autoExclusions(monthTxs, monthAcct){
+  const autoTx = new Map(), autoAcct = new Map();
+  const byDateDesc = (a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0);
+  const deposits = monthAcct.filter(a => Number(a.amount) > 0).slice().sort(byDateDesc);
+  const withdrawals = monthAcct.filter(a => Number(a.amount) < 0).slice().sort(byDateDesc);
+  const incomes = monthTxs.filter(t => t.kind === "income").slice().sort(byDateDesc);
+
+  // A：存入非真收入，且存在不同帳戶、同額、日差≤2 的未用提領 →「帳戶互轉／家人互轉」
+  const usedW = new Set();
+  for (const d of deposits){
+    const cat = incomeCategory((d.description || "") + " " + (d.note || ""));
+    if (TRUE_INCOME_CATS.includes(cat)) continue;
+    const w = withdrawals.find(x => !usedW.has(x.id) && x.account_id !== d.account_id &&
+      Math.abs(Number(x.amount)) === Number(d.amount) && dayDiff(x.occurred_at, d.occurred_at) <= 2);
+    if (w){
+      usedW.add(w.id);
+      const oD = assetOwner(d.account_id), oW = assetOwner(w.account_id);
+      const label = oD === oW ? "帳戶互轉" : `家人互轉 ${nickOf(oW)}→${nickOf(oD)}`;
+      autoAcct.set(d.id, label); autoAcct.set(w.id, label);
+    }
+  }
+  // A2：同帳戶、同額、同 description、日差≤2 →「轉帳(進出相抵)」（只標存入）
+  const usedW2 = new Set();
+  for (const d of deposits){
+    if (autoAcct.has(d.id)) continue;
+    const desc = (d.description || "").trim();
+    if (!desc) continue;
+    const w = withdrawals.find(x => !usedW2.has(x.id) && !autoAcct.has(x.id) && x.account_id === d.account_id &&
+      Math.abs(Number(x.amount)) === Number(d.amount) && (x.description || "").trim() === desc &&
+      dayDiff(x.occurred_at, d.occurred_at) <= 2);
+    if (w){ usedW2.add(w.id); autoAcct.set(d.id, "轉帳(進出相抵)"); }
+  }
+  // C：存入與交易表 income 同額（整數比較）、日差≤3 → 排除銀行存入「與對帳單重複」
+  const usedI = new Set();
+  for (const d of deposits){
+    if (autoAcct.has(d.id)) continue;
+    const it = incomes.find(t => !usedI.has(t.id) &&
+      Math.trunc(Number(t.amount)) === Math.trunc(Number(d.amount)) && dayDiff(t.occurred_at, d.occurred_at) <= 3);
+    if (it){ usedI.add(it.id); autoAcct.set(d.id, "與對帳單重複"); }
+  }
+  // B：交易表 income、非手動、非賣出/配息/利息 →「信用卡退款/返還」，並盡量對消同額同商家 expense
+  const usedE = new Set();
+  for (const t of incomes){
+    if (autoTx.has(t.id)) continue;
+    if (t.source === "manual") continue;
+    const cat = incomeCategory((t.merchant || "") + " " + (t.note || ""));
+    if (REFUND_PROTECT_CATS.includes(cat)) continue;
+    autoTx.set(t.id, "信用卡退款/返還");
+    const m = (t.merchant || "").trim().toLowerCase();
+    if (m){
+      const e = monthTxs.find(x => !usedE.has(x.id) && !autoTx.has(x.id) && x.kind === "expense" &&
+        Number(x.amount) === Number(t.amount) && (x.merchant || "").trim().toLowerCase() === m);
+      if (e){ usedE.add(e.id); autoTx.set(e.id, "退款對消"); }
+    }
+  }
+  return { autoTx, autoAcct };
+}
+
+// 排除優先序：手動 exclude_state → filter_rules → exclude_rules → 自動偵測 → 納入
+function effExclude(t, autoTx){
+  if (t.exclude_state === "include") return null;
+  if (t.exclude_state === "exclude") return "手動排除";
+  const fr = matchFilterRule(t.merchant, t.note, statSource(t), Number(t.amount), t.kind === "income" ? "income" : "expense");
+  if (fr && fr.action === "exclude") return "篩選器";
+  if (fr && fr.action === "include") return null;
+  const rs = ruleExcludeState(t.merchant || t.note || "");
+  if (rs === "exclude") return "規則排除";
+  if (rs === "include") return null;
+  return autoTx.get(t.id) || null;
+}
+function incExclude(item, autoTx, autoAcct){
+  if (item.excludeState === "include") return null;
+  if (item.excludeState === "exclude") return "手動排除";
+  const fr = matchFilterRule(item.desc, "", item.source, item.amount, "income");
+  if (fr && fr.action === "exclude") return "篩選器";
+  if (fr && fr.action === "include") return null;
+  const rs = ruleExcludeState(item.desc);
+  if (rs === "exclude") return "規則排除";
+  if (rs === "include") return null;
+  return (item.origin === "tx" ? autoTx.get(item.id) : autoAcct.get(item.id)) || null;
+}
+
+// 收入合成（v21）：transactions kind=income(unique) ＋ account_transactions 存入(amount>0)
+function buildIncome(monthTxs, monthAcct){
+  const items = [];
+  for (const t of monthTxs){
+    if (t.kind !== "income" || t.dedup_status !== "unique") continue;
+    items.push({
+      id: t.id, origin: "tx", date: t.occurred_at, amount: Number(t.amount),
+      cat: incomeCategory((t.merchant || "") + " " + (t.note || "")),
+      desc: t.merchant || t.note || "收入", source: statSource(t),
+      ownerId: txOwner(t), excludeState: t.exclude_state
+    });
+  }
+  for (const a of monthAcct){
+    if (Number(a.amount) <= 0) continue;
+    items.push({
+      id: a.id, origin: "acct", date: a.occurred_at, amount: Math.trunc(Number(a.amount)),
+      cat: incomeCategory((a.description || "") + " " + (a.note || "")),
+      desc: a.description || "存入", source: acctName(a.account_id),
+      ownerId: assetOwner(a.account_id), excludeState: a.exclude_state
+    });
+  }
+  items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return items;
+}
+
+// 月彙總：計入支出/收入、分類、排除清單、投資/轉帳、suspect 數
+function computeMonth(y, m){
+  const start = ms(y, m), [ny, nm] = ymAdd(y, m, 1), end = ms(ny, nm);
+  // 客戶端再夾一次月份邊界（防禦：上界過濾失效教訓）
+  const txs = ctx.txs.filter(t => t.occurred_at >= start && t.occurred_at < end);
+  const acct = ctx.acctTxs.filter(a => a.occurred_at >= start && a.occurred_at < end);
+  const { autoTx, autoAcct } = autoExclusions(txs, acct);
+  const mf = memberFilter;
+  let te = 0, ti = 0, investIn = 0, investOut = 0, transferSum = 0;
+  const byCat = {}, excluded = [];
+
+  for (const t of txs){
+    if (t.kind !== "expense" || t.dedup_status !== "unique") continue;
+    if (mf && txOwner(t) !== mf) continue;
+    const reason = effExclude(t, autoTx);
+    if (reason){ excluded.push({ date: t.occurred_at, name: t.merchant || t.note || "（無名）", amount: t.amount, reason }); continue; }
+    te += Number(t.amount);
+    const cat = classifyF(t);
+    byCat[cat] = (byCat[cat] || 0) + Number(t.amount);
+  }
+  for (const it of buildIncome(txs, acct)){
+    if (mf && it.ownerId !== mf) continue;
+    const reason = incExclude(it, autoTx, autoAcct);
+    if (reason){ excluded.push({ date: it.date, name: it.desc, amount: it.amount, reason }); continue; }
+    ti += it.amount;
+  }
+  for (const t of txs){
+    if (t.dedup_status !== "unique") continue;
+    if (t.kind !== "invest" && t.kind !== "transfer") continue;
+    if (mf && txOwner(t) !== mf) continue;
+    let tag;
+    if (t.kind === "transfer"){ transferSum += Number(t.amount); tag = "轉帳"; }
+    else if (isInvestSell(t)){ investOut += Number(t.amount); tag = "投資賣出"; }
+    else { investIn += Number(t.amount); tag = "投資買入"; }
+    excluded.push({ date: t.occurred_at, name: t.merchant || t.note || "（無名）", amount: t.amount, reason: tag });
+  }
+  const suspect = txs.filter(t => t.dedup_status === "suspect" &&
+    (t.kind === "expense" || t.kind === "income") && (!mf || txOwner(t) === mf)).length;
+  excluded.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return { te, ti, byCat, excluded, investIn, investOut, transferSum, suspect,
+           hasData: txs.length > 0 || acct.length > 0 };
+}
+
+/* ═══════════ 合成示範資料（皆為虛構，僅供 ?demo=1 預覽） ═══════════ */
+function loadDemoData(){
+  const today = new Date();
+  let seq = 0;
+  const id = p => p + (++seq);
+  const dstr = (off, day) => { // off 個月前的第 day 天
+    const d = new Date(today.getFullYear(), today.getMonth() - off, 1);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(Math.min(day, 28))}`;
+  };
+  ctx.members = [
+    { id: "m1", name: "爸爸", nickname: "爸爸", user_id: "demo-u1", sort_order: 0 },
+    { id: "m2", name: "媽媽", nickname: "媽媽", user_id: null, sort_order: 1 }
+  ];
+  ctx.accounts = [
+    { id: "a1", name: "示範銀行·(爸爸)薪轉", display_name: "示範銀行(爸爸)", member_id: "m1", type: "bank" },
+    { id: "a2", name: "示範銀行·(媽媽)生活", display_name: "示範銀行(媽媽)", member_id: "m2", type: "bank" }
+  ];
+  const budgets = { "🍜 飲食": 8000, "🧺 食品雜貨": 10000, "🚗 交通": 3000 };
+  ctx.labels = AI_CATS.map((k, i) => ({
+    key: k, label: k === "🍜 飲食" ? "🍜 餐飲美食" : k,
+    sort_order: i, builtin: true, active: true, budget: budgets[k] || null
+  }));
+  ctx.catRules = [{ merchant: "小陳水果行", category: "🧺 食品雜貨", source: "user" }];
+  ctx.exclRules = [{ pattern: "line pay 儲值", exclude_state: "exclude" }];
+  ctx.filterRules = [{ name: "忽略測試", priority: 10, kw: "測試", account: "", amount_min: null, amount_max: null, direction: "any", action: "exclude", active: true }];
+
+  const txs = [], acct = [];
+  const tx = (off, day, merchant, amount, o) => txs.push(Object.assign({
+    id: id("t"), kind: "expense", amount, merchant, note: "", occurred_at: dstr(off, day),
+    source: "einvoice", dedup_status: "unique", exclude_state: null,
+    family_member_id: "m1", member_id: null
+  }, o || {}));
+  const at = (off, day, accountId, amount, description, o) => acct.push(Object.assign({
+    id: id("a"), account_id: accountId, occurred_at: dstr(off, day),
+    description, amount, note: "", source: "email", exclude_state: null
+  }, o || {}));
+
+  for (let off = 0; off < 6; off++){
+    // 每月固定：薪資、利息（存款＋對帳單成對→規則 C）、日常消費
+    at(off, 5, "a1", 80000, "示範公司 薪資轉帳");
+    at(off, 20, "a1", 12 + off, "利息存入");
+    tx(off, 20, "銀行利息", 12 + off, { kind: "income", source: "email", note: "[email] 示範銀行(1234)" });
+    tx(off, 3, "全聯福利中心", 2500 - off * 120, { family_member_id: "m2" });
+    tx(off, 8, "麥當勞", 320 + off * 15);
+    tx(off, 11, "一蘭拉麵", 480, { family_member_id: "m2" });
+    tx(off, 13, "中油直營站", 900);
+    tx(off, 15, "NETFLIX.COM", 390, { source: "email", note: "[email] 示範銀行信用卡(1234)" });
+    tx(off, 17, "蝦皮購物", 890 + off * 60, { family_member_id: "m2" });
+    tx(off, 21, "中華電信", 999);
+  }
+  // 本月加料：展示各種規則
+  tx(0, 6, "台電電費", 1200, { family_member_id: "m2" });
+  tx(0, 9, "台灣高鐵", 1490);
+  tx(0, 10, "悠遊卡加值", 800, { family_member_id: "m2" });
+  tx(0, 12, "康是美藥局", 250, { family_member_id: "m2" });
+  tx(0, 3, "全聯福利中心", 2500, { family_member_id: "m2", dedup_status: "suspect" });   // 疑似重複
+  tx(0, 14, "公司代墊-出差餐費", 5000, { exclude_state: "exclude", source: "manual" }); // 手動排除
+  tx(0, 16, "LINE Pay 儲值", 1000);                                                     // 規則排除
+  tx(0, 18, "測試交易請忽略", 1);                                                       // 篩選器
+  tx(0, 19, "小陳水果行", 660, { family_member_id: "m2" });                              // 商家規則分類
+  tx(0, 22, "蝦皮購物", 650, { family_member_id: "m2" });                                // 退款對消（支出）
+  tx(0, 24, "蝦皮購物", 650, { kind: "income", source: "email", note: "退刷", family_member_id: "m2" }); // 退款/返還
+  tx(0, 7, "普買 台積電", 50000, { kind: "invest", source: "email" });
+  tx(0, 23, "普賣 0050", 30000, { kind: "invest", source: "email" });
+  tx(0, 25, "信用卡自動扣繳", 15000, { kind: "transfer", source: "email" });
+  at(0, 12, "a1", -20000, "網銀轉帳");   // 家人互轉配對（規則 A）
+  at(0, 12, "a2", 20000, "網銀轉帳");
+  at(0, 15, "a1", 5000, "刷卡金額調整"); // 同帳戶進出相抵（規則 A2）
+  at(0, 15, "a1", -5000, "刷卡金額調整");
+
+  ctx.txs = txs;
+  ctx.acctTxs = acct;
+  ctx.loadedRange = { start: "0000-01-01", end: "9999-12-31" }; // demo 不需再抓
+}
+
+/* ═══════════ 畫面切換與 UI ═══════════ */
+const VIEWS = ["status", "login", "nomember", "errorBox", "app"];
+function showView(name){ for (const v of VIEWS) $(v).hidden = (v !== name); }
+function showStatus(msg){ $("statusMsg").textContent = msg; showView("status"); }
+function showError(msg){ $("errorMsg").textContent = msg; showView("errorBox"); }
+
+function buildMonthOptions(){
+  const sel = $("monthSel");
+  clear(sel);
+  const d = new Date();
+  for (let i = 0; i < 12; i++){
+    const y = d.getFullYear(), m = d.getMonth() + 1;
+    const o = document.createElement("option");
+    o.value = `${y}-${m}`;
+    o.textContent = `${y} 年 ${m} 月`;
+    sel.appendChild(o);
+    d.setMonth(d.getMonth() - 1);
+  }
+}
+function buildChips(){
+  const box = $("chips");
+  clear(box);
+  const mk = (label, val) => {
+    const b = el("button", "chip" + ((memberFilter === val) ? " active" : ""), label);
+    b.addEventListener("click", () => { memberFilter = val; buildChips(); render(); });
+    box.appendChild(b);
+  };
+  mk("👨‍👩‍👧 全家（合併）", null);
+  for (const m of ctx.members) mk(m.nickname || m.name || "成員", m.id);
+}
+
+const PIE_COLORS = ["#0abde3", "#feca57", "#5f27cd", "#ff9f43", "#54a0ff", "#01a3a4",
+                    "#f368e0", "#576574", "#3ae374", "#ee5253", "#10ac84", "#8395a7", "#e77f67", "#786fa6"];
+
+function paint(){
+  const [y, m] = $("monthSel").value.split("-").map(Number);
+  const cur = computeMonth(y, m);
+  const ink = css("--ink"), sub = css("--sub");
+
+  // 收支卡
+  $("sumExp").textContent = fmt(cur.te);
+  $("sumInc").textContent = fmt(cur.ti);
+  $("sumNet").textContent = fmt(cur.te - cur.ti);
+  $("investLine").textContent =
+    `買入 ${fmt(cur.investIn)}｜賣出 ${fmt(cur.investOut)}｜轉帳 ${fmt(cur.transferSum)}`;
+  $("suspectHint").hidden = cur.suspect === 0;
+  $("suspectHint").textContent = cur.suspect > 0 ? `⚠️ ${cur.suspect} 筆疑似重複未計入，請到 App 確認` : "";
+  $("emptyHint").hidden = cur.hasData;
+
+  // 分類圓餅
+  const cats = Object.entries(cur.byCat).sort((a, b) => b[1] - a[1]);
+  if (pieChart) pieChart.destroy();
+  $("pieEmpty").hidden = cats.length > 0;
+  $("pie").style.display = cats.length ? "" : "none";
+  if (cats.length && window.Chart){
+    pieChart = new Chart($("pie"), {
+      type: "doughnut",
+      data: { labels: cats.map(c => labelOf(c[0])),
+              datasets: [{ data: cats.map(c => c[1]), backgroundColor: PIE_COLORS, borderWidth: 0 }] },
+      options: { plugins: { legend: { position: "right", labels: { color: ink, boxWidth: 12 } } } }
+    });
+  }
+
+  // 近 6 月趨勢（同一套語意逐月計算）
+  const labels = [], expData = [], incData = [];
+  for (let i = 5; i >= 0; i--){
+    const [ty, tm] = ymAdd(y, m, -i);
+    const r = computeMonth(ty, tm);
+    labels.push(`${ty}/${pad(tm)}`);
+    expData.push(r.te);
+    incData.push(r.ti);
+  }
+  if (trendChart) trendChart.destroy();
+  if (window.Chart){
+    trendChart = new Chart($("trend"), {
+      type: "line",
+      data: { labels, datasets: [
+        { label: "支出", data: expData, borderColor: css("--red"), tension: .3 },
+        { label: "收入", data: incData, borderColor: css("--green"), tension: .3 }] },
+      options: { plugins: { legend: { labels: { color: ink } } },
+                 scales: { y: { beginAtZero: true, ticks: { color: sub } }, x: { ticks: { color: sub } } } }
+    });
+  }
+
+  // 預算進度
+  const box = $("budgets");
+  clear(box);
+  const budgeted = ctx.labels.filter(l => l.active !== false && Number(l.budget) > 0)
+                             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  if (!budgeted.length) box.appendChild(el("span", "muted", "尚未設定分類預算"));
+  for (const l of budgeted){
+    const spent = cur.byCat[l.key] || 0;
+    const pct = Math.min(100, Math.round(spent / l.budget * 100));
+    const over = spent > l.budget;
+    const row = el("div", "row");
+    row.appendChild(el("span", null, l.label));
+    const right = el("span", over ? "warn" : null,
+      `${fmt(spent)} / ${fmt(l.budget)}${over ? `　⚠️超支 ${fmt(spent - l.budget)}` : `（${pct}%）`}`);
+    row.appendChild(right);
+    box.appendChild(row);
+    const bar = el("div", "bar");
+    const fill = el("div", over ? "over" : null);
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    box.appendChild(bar);
+  }
+
+  // 已排除清單（灰字＋原因；DB 字串全走 textContent）
+  const exbox = $("excludedList");
+  clear(exbox);
+  if (!cur.excluded.length) exbox.appendChild(el("span", "muted", "本月沒有被排除的項目"));
+  for (const e of cur.excluded){
+    const row = el("div", "exrow");
+    row.appendChild(el("span", "d", e.date.slice(5)));
+    row.appendChild(el("span", "n", e.name));
+    row.appendChild(el("span", "r", e.reason));
+    row.appendChild(el("span", "a", fmt(e.amount)));
+    exbox.appendChild(row);
+  }
+}
+
+/* ═══════════ 資料載入（live 模式） ═══════════ */
+async function pagedFetch(mk){
+  const size = 1000;
+  let out = [];
+  for (let page = 0; ; page++){
+    const { data, error } = await mk().range(page * size, (page + 1) * size - 1);
+    if (error) throw error;
+    out = out.concat(data || []);
+    if (!data || data.length < size) break;
+  }
+  return out;
+}
+async function selAll(table){
+  const { data, error } = await sb.from(table).select("*");
+  if (error) throw error;
+  return data || [];
+}
+async function loadStatic(){
+  const [labels, catRules, exclRules, filterRules, members, accounts] = await Promise.all([
+    selAll("category_labels"), selAll("category_rules"), selAll("exclude_rules"),
+    selAll("filter_rules"), selAll("members"), selAll("asset_accounts")
+  ]);
+  ctx.labels = labels;
+  ctx.catRules = catRules.slice().sort((a, b) => (a.source === "user" ? 0 : 1) - (b.source === "user" ? 0 : 1));
+  ctx.exclRules = exclRules;
+  ctx.filterRules = filterRules.filter(r => r.active !== false)
+                               .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+  ctx.members = members.slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  ctx.accounts = accounts;
+}
+async function ensureRange(y, m){
+  const [sy, smn] = ymAdd(y, m, -5);
+  const start = ms(sy, smn);
+  const [ny, nm] = ymAdd(y, m, 1);
+  const end = ms(ny, nm);
+  const r = ctx.loadedRange;
+  if (r && r.start <= start && r.end >= end) return;
+  showStatus("讀取交易資料中…");
+  const txs = await pagedFetch(() =>
+    sb.from("transactions").select("*")
+      .eq("household_id", hid)
+      .neq("dedup_status", "merged")
+      .gte("occurred_at", start).lt("occurred_at", end)
+      .order("occurred_at", { ascending: false }));
+  // 客戶端再夾一次月份邊界（防上界過濾失效）
+  ctx.txs = txs.filter(t => t.occurred_at >= start && t.occurred_at < end);
+  const ids = ctx.accounts.map(a => a.id);
+  let acct = [];
+  if (ids.length){
+    acct = await pagedFetch(() =>
+      sb.from("account_transactions").select("*")
+        .in("account_id", ids)
+        .gte("occurred_at", start).lt("occurred_at", end)
+        .order("occurred_at", { ascending: false }));
+  }
+  ctx.acctTxs = acct.filter(a => a.occurred_at >= start && a.occurred_at < end);
+  ctx.loadedRange = { start, end };
+  showView("app");
+}
+
+async function render(){
+  try {
+    const [y, m] = $("monthSel").value.split("-").map(Number);
+    if (!DEMO) await ensureRange(y, m);
+    showView("app");
+    paint();
+  } catch (e){
+    console.error(e);
+    showError("讀取資料失敗：" + (e && e.message ? e.message : e));
+  }
+}
+
+/* ═══════════ 啟動流程 ═══════════ */
+function bindNav(){
+  $("btnPrev").addEventListener("click", () => {
+    const sel = $("monthSel");
+    if (sel.selectedIndex < sel.length - 1){ sel.selectedIndex++; render(); }
+  });
+  $("btnNext").addEventListener("click", () => {
+    const sel = $("monthSel");
+    if (sel.selectedIndex > 0){ sel.selectedIndex--; render(); }
+  });
+  $("monthSel").addEventListener("change", render);
+  $("btnRetry").addEventListener("click", () => location.reload());
+  // 深色/淺色切換時重畫圖表顏色
+  if (window.matchMedia){
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (!$("app").hidden) paint();
+    });
+  }
+}
+
+function startDemo(){
+  loadDemoData();
+  $("demoBadge").hidden = false;
+  $("who").textContent = "";
+  buildMonthOptions();
+  buildChips();
+  showView("app");
+  paint();
+}
+
+async function afterLogin(session){
+  try {
+    $("who").textContent = session.user.email || "";
+    $("btnSignOut").hidden = false;
+    showStatus("確認家庭成員資格中…");
+    const { data: hm, error } = await sb.from("household_members").select("household_id").limit(1);
+    if (error) throw error;
+    if (!hm || !hm.length){ showView("nomember"); return; }   // 非成員：到此為止，不提供加入功能
+    hid = hm[0].household_id;
+    showStatus("讀取設定中…");
+    await loadStatic();
+    buildMonthOptions();
+    buildChips();
+    await render();
+  } catch (e){
+    console.error(e);
+    showError("初始化失敗：" + (e && e.message ? e.message : e));
+  }
+}
+
+function startLive(){
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  $("btnGoogle").addEventListener("click", async () => {
+    $("loginErr").textContent = "";
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: location.origin + location.pathname }
+    });
+    if (error) $("loginErr").textContent = error.message;
+  });
+  const doSignOut = async () => { await sb.auth.signOut(); location.reload(); };
+  $("btnSignOut").addEventListener("click", doSignOut);
+  $("btnSignOut2").addEventListener("click", doSignOut);
+  let started = false;
+  sb.auth.onAuthStateChange((_ev, session) => {
+    if (session && !started){ started = true; afterLogin(session); }
+  });
+  sb.auth.getSession().then(({ data: { session } }) => {
+    if (session){ if (!started){ started = true; afterLogin(session); } }
+    else if (!started) showView("login");
+  });
+}
+
+bindNav();
+if (DEMO){
+  startDemo();
+} else {
+  // 只有非 demo 模式才載入 supabase-js（demo 完全不連 Supabase）
+  showStatus("載入中…");
+  const s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+  s.onload = startLive;
+  s.onerror = () => showError("無法載入 Supabase 程式庫，請檢查網路連線。");
+  document.head.appendChild(s);
+}
+</script>
+</body>
+</html>
