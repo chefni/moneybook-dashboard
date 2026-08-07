@@ -20,17 +20,25 @@
         渲染整頁，供部署前預覽。合成資料皆為虛構。
      部署說明見同目錄 DEPLOY.md。⚠️ snapshot.html 含真實資料，絕不可部署。
      ═══════════════════════════════════════════════════════════════════ -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<!-- v2.1 零信任（2026-08-07 團隊審查）：CDN 釘死版號＋SRI——浮動 @4 若上游/CDN 被汙染
+     ＝含登入 session 的頁面跑任意 JS。defer＝不阻塞首屏渲染（需求④）。 -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://zdfhieekhaaqfarqpslc.supabase.co">
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
+        integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
+        crossorigin="anonymous"></script>
 <style>
   :root {
-    --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#8395a7;
-    --accent:#0abde3; --red:#ee5253; --green:#10ac84;
+    /* v2.1 A11y：淺色模式輔助字/紅綠改高對比（WCAG AA 4.5:1）——原 #8395a7/#ee5253/#10ac84 皆不及格 */
+    --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
+    --accent:#0abde3; --red:#c6323c; --green:#0b7a5e;
     --line:#dfe4ea; --track:#f1f2f6;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg:#171b21; --card:#222a33; --ink:#e9eef3; --sub:#8fa1b3;
       --line:#39434f; --track:#2d3641;
+      --red:#ee5253; --green:#10ac84;   /* 深色底用亮色紅綠（高對比值在深底反而變暗） */
     }
   }
   * { box-sizing:border-box; margin:0; }
@@ -83,7 +91,8 @@
 
 <!-- 載入中 -->
 <div id="status" class="center">
-  <div class="card"><p id="statusMsg">載入中…</p></div>
+  <!-- v2.1 A11y：aria-live——朗讀器使用者才聽得到「載入中/請登入」等狀態變化 -->
+  <div class="card"><p id="statusMsg" role="status" aria-live="polite">載入中…</p></div>
 </div>
 
 <!-- 登入 -->
@@ -144,12 +153,12 @@
     </div>
     <div class="card">
       <h2>分類佔比</h2>
-      <canvas id="pie"></canvas>
+      <canvas id="pie" role="img" aria-label="支出分類佔比圓餅圖（數值見下方分類細項清單）"></canvas>
       <p class="muted" id="pieEmpty" hidden>本月無支出資料</p>
     </div>
     <div class="card">
       <h2>近 6 月趨勢</h2>
-      <canvas id="trend"></canvas>
+      <canvas id="trend" role="img" aria-label="近六個月收入與支出趨勢圖"></canvas>
     </div>
     <div class="card">
       <h2>預算進度</h2>
@@ -734,6 +743,7 @@ async function ensureRange(y, m){
     sb.from("transactions").select("*")
       .eq("household_id", hid)
       .neq("dedup_status", "merged")
+      .neq("dedup_status", "aux")     // v2.1 需求①：通知輔助層不進儀表板（帳單明細為唯一正式來源）
       .gte("occurred_at", start).lt("occurred_at", end)
       .order("occurred_at", { ascending: false }));
   // 客戶端再夾一次月份邊界（防上界過濾失效）
@@ -837,6 +847,9 @@ function startLive(){
   });
 }
 
+// v2.1：chart.js 改 defer 後，啟動一律等 DOMContentLoaded（deferred script 保證先執行完）
+document.addEventListener("DOMContentLoaded", boot);
+function boot(){
 bindNav();
 if (DEMO){
   startDemo();
@@ -844,10 +857,14 @@ if (DEMO){
   // 只有非 demo 模式才載入 supabase-js（demo 完全不連 Supabase）
   showStatus("載入中…");
   const s = document.createElement("script");
-  s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+  // v2.1 零信任：釘死版號＋SRI（同 chart.js；浮動 @2 被汙染＝session 全拿）
+  s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.53.0/dist/umd/supabase.min.js";
+  s.integrity = "sha384-H9dj4GG/hgfwNjlYa740FF9geXbzyXSgepgoobvIAW49UUAcfk+GAiBnLDIs4hRh";
+  s.crossOrigin = "anonymous";
   s.onload = startLive;
   s.onerror = () => showError("無法載入 Supabase 程式庫，請檢查網路連線。");
   document.head.appendChild(s);
+}
 }
 </script>
 </body>
