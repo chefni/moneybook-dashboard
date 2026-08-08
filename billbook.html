@@ -19,11 +19,14 @@
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
     --accent:#0abde3; --red:#c6323c; --green:#0b7a5e; --amber:#8a6d00;
+    /* --accent 當底色/文字只有 2.2:1，戶外看不見；文字與選中態一律用 --accent-ink（5.6:1） */
+    --accent-ink:#0b7285;
     --line:#dfe4ea; --track:#f1f2f6;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#171b21; --card:#222a33; --ink:#e9eef3; --sub:#8fa1b3;
-            --line:#39434f; --track:#2d3641; --red:#ee5253; --green:#10ac84; --amber:#f6c445; }
+            --line:#39434f; --track:#2d3641; --red:#ee5253; --green:#10ac84; --amber:#f6c445;
+            --accent-ink:#0abde3; }
   }
   * { box-sizing:border-box; margin:0; }
   body { font-family:"Noto Sans TC",system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:16px; }
@@ -32,7 +35,7 @@
   h2 { font-size:15px; margin-bottom:8px; }
   button, select { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line);
                    background:var(--card); color:var(--ink); min-height:40px; }
-  button[aria-pressed="true"] { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button[aria-pressed="true"] { background:var(--accent-ink); color:#fff; border-color:var(--accent-ink); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
   .muted { color:var(--sub); font-size:13px; }
   .center { display:flex; justify-content:center; padding:40px 0; }
@@ -50,17 +53,23 @@
   .clickable { cursor:pointer; }
   .clickable:hover { background:var(--track); }
   .scroll { overflow-x:auto; }
-  a.back { color:var(--accent); cursor:pointer; font-size:14px; }
+  a.back { color:var(--accent-ink); cursor:pointer; font-size:14px; }
+  .ell, .ell > div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .right { text-align:right; }
 </style>
 </head>
 <body>
 
 <header>
   <h1>📑 對帳簿</h1>
+  <a class="back" href="./index.html">← 家庭儀表板</a>
   <span class="muted" id="whoami"></span>
   <span class="grow"></span>
   <button id="btnSignOut" hidden>登出</button>
 </header>
+<p class="muted" style="margin:-4px 0 12px">
+  照銀行／信用卡帳單原文逐筆核對，數字對不上時來這裡查。（看「這個月花多少」請用家庭儀表板）
+</p>
 
 <div id="status" class="center">
   <div class="card"><p id="statusMsg" role="status" aria-live="polite">載入中…</p></div>
@@ -128,8 +137,13 @@ function showError(m){ $("errorMsg").textContent = m; showView("errorBox"); }
 let sb = null, ctx = { statements: [], lines: {} };
 
 // ── 對帳：三種 scope 各自的算法（零衍生，只比對原文欄位）──────────────
+const fmtSigned = n => (Number(n) < 0 ? "−" : "+") + "NT$ " +
+  Math.abs(Math.round(Number(n) || 0)).toLocaleString("zh-TW");
+
 function recon(st, lines){
   if (st.lines_scope === "purchases"){
+    // 空明細≠對不上：uploader 有「空明細不清空既有明細」保護，會出現只有帳單頭的期別
+    if (!lines.length) return { kind: "none", text: "此期只收到帳單頭，無逐筆原文可對" };
     const sum = lines.reduce((a, l) => a + Number(l.amount), 0);
     const base = st.new_spend != null ? Number(st.new_spend)
                : (st.total_due != null ? Number(st.total_due) : null);
@@ -139,23 +153,30 @@ function recon(st, lines){
              basis: st.new_spend != null ? "本期新增" : "本期應繳（無新增欄）" };
   }
   if (st.lines_scope === "ledger"){
-    const byAcct = {};
-    for (const l of lines){
-      if (l.balance == null) continue;
-      (byAcct[l.account || ""] ||= []).push(l);
-    }
-    const accts = Object.keys(byAcct);
-    if (!accts.length) return { kind: "none", text: "此對帳單無餘額欄，僅陳列流水" };
-    let bad = 0, detail = [];
+    const all = {};                       // 該帳號全部列（含無餘額列，金額仍要計入）
+    for (const l of lines) (all[l.account || ""] ||= []).push(l);
+    const accts = Object.keys(all);
+    if (!accts.length) return { kind: "none", text: "此對帳單無流水可對" };
+    let bad = 0, okN = 0, detail = [];
     for (const a of accts){
-      const rows = byAcct[a];
-      const open = Number(rows[0].balance) - Number(rows[0].amount);
-      const close = Number(rows[rows.length - 1].balance);
-      const calc = open + rows.reduce((s, r) => s + Number(r.amount), 0);
-      const d = Math.round(calc - close);
-      if (Math.abs(d) >= 1) bad++;
+      const rows = all[a].slice().sort((x, y) => Number(x.line_no) - Number(y.line_no));
+      const withBal = rows.filter(r => r.balance != null);
+      // 只有 0-1 列有餘額時，期初＝末列餘額−末列金額 會恆等於期末＝假陽性「相符」
+      if (withBal.length < 2){
+        detail.push({ acct: a, insufficient: true });
+        continue;
+      }
+      const first = withBal[0], last = withBal[withBal.length - 1];
+      const open = Number(first.balance) - Number(first.amount);
+      const close = Number(last.balance);
+      // Σ 取首尾之間的全部列（含無餘額列，例如 AI 後備解析的列），不可只加有餘額的
+      const span = rows.filter(r => Number(r.line_no) >= Number(first.line_no) &&
+                                    Number(r.line_no) <= Number(last.line_no));
+      const d = Math.round(open + span.reduce((s, r) => s + Number(r.amount), 0) - close);
+      if (Math.abs(d) >= 1) bad++; else okN++;
       detail.push({ acct: a, open, close, diff: d });
     }
+    if (!okN && !bad) return { kind: "none", accounts: detail, text: "餘額列不足，無法驗證" };
     return { kind: bad ? "bad" : "ok", accounts: detail,
              text: `${accts.length} 個帳號・期初＋收支＝期末` };
   }
@@ -165,7 +186,8 @@ function recon(st, lines){
 function statusNode(r){
   if (r.kind === "ok") return el("span", "ok", "✓ 相符");
   if (r.kind === "bad")
-    return el("span", "bad", r.diff != null ? `⚠ 差 ${fmt(r.diff)}` : "⚠ 有帳號對不上");
+    return el("span", "bad", r.diff != null
+      ? `⚠ 逐筆比帳單${r.diff > 0 ? "多" : "少"} ${fmt(Math.abs(r.diff))}` : "⚠ 有帳號對不上");
   return el("span", "muted", r.text || "—");
 }
 
@@ -302,14 +324,16 @@ function bindNav(){
 }
 
 async function pagedFetch(makeQuery){
-  const out = []; const size = 1000;
-  for (let page = 0; page < 30; page++){
+  const out = []; const size = 1000; const maxPages = 30;
+  for (let page = 0; page < maxPages; page++){
     const { data, error } = await makeQuery().range(page * size, page * size + size - 1);
     if (error) throw error;
     out.push(...data);
-    if (data.length < size) break;
+    if (data.length < size) return out;
   }
-  return out;
+  // 跑滿上限且最後一頁仍是滿的＝資料被截斷。靜默截斷會讓對帳少算逐筆而顯示成假差額，
+  // 寧可明白報錯（原本會無聲回傳不完整資料）。
+  throw new Error(`資料超過 ${maxPages * size} 列，對帳會不完整——請回報以改為分批載入`);
 }
 
 async function afterLogin(session){
@@ -317,12 +341,21 @@ async function afterLogin(session){
   $("btnSignOut").hidden = false;
   showStatus("讀取對帳簿…");
   try {
-    const sts = await pagedFetch(() => sb.from("statements").select("*").order("period", { ascending: false }));
+    // 排序鍵必須唯一，否則 OFFSET 分頁跨頁時 Postgres 不保證穩定＝重複或漏列（靜默算錯）
+    const sts = await pagedFetch(() => sb.from("statements").select("*")
+      .order("period", { ascending: false }).order("id"));
     if (!sts.length){ showError("查無對帳簿資料。請確認已在手機 App 登入同一個家庭，並跑過一次同步。"); return; }
-    const lines = await pagedFetch(() => sb.from("statement_lines").select("*").order("line_no"));
+    // line_no 只在單張帳單內唯一，全表看是大量重複值 → 必須配 statement_id 才穩定
+    // （schema 有 uniq_stmt_line(statement_id, line_no) 唯一索引，此組合絕對唯一）。
+    // 欄位白名單：raw 是每列完整 PDF 原文，目前 UI 不用，別讓它佔滿首屏頻寬。
+    const lines = await pagedFetch(() => sb.from("statement_lines")
+      .select("statement_id,line_no,txn_date,post_date,description,amount,account,balance")
+      .order("statement_id").order("line_no"));
     ctx.statements = sts;
     ctx.lines = {};
     for (const l of lines) (ctx.lines[l.statement_id] ||= []).push(l);
+    // 防禦性重排：對帳算法不該依賴查詢回來的順序
+    for (const k in ctx.lines) ctx.lines[k].sort((a, b) => Number(a.line_no) - Number(b.line_no));
     renderInstitutions();
     renderMonths();
     showView("main");
