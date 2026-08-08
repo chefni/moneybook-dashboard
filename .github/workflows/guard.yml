@@ -13,9 +13,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
-      - name: 只允許 index.html / billbook.html / .nojekyll
+      - name: 只允許 index.html / billbook.html / .nojekyll / selftest.js
         run: |
-          bad=$(git ls-files | grep -vE '^(index|billbook)\.html$|^\.nojekyll$|^\.github/workflows/guard\.yml$' || true)
+          bad=$(git ls-files | grep -vE '^(index|billbook)\.html$|^\.nojekyll$|^selftest\.js$|^\.github/workflows/guard\.yml$' || true)
           if [ -n "$bad" ]; then
             echo "::error::出現白名單以外的檔案，可能外洩私人資料："
             echo "$bad"
@@ -29,3 +29,7 @@ jobs:
             exit 1
           fi
           echo "✅ 無機密字串"
+      # 對帳演算法會「算錯而不報錯」（少加一列＝假差額，多加一列＝把不符顯示成相符），
+      # 是這兩頁唯一無法靠肉眼看出來的邏輯。跑頁內那一份 recon()，不另外複製演算法。
+      - name: 對帳演算法自測
+        run: node selftest.js billbook.html
