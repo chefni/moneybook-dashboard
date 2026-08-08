@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>對帳簿</title>
+<!-- ═══════════════════════════════════════════════════════════════════
+     對帳簿（billbook）網頁版 v1（2026-08-08）
+     鐵律（billbook-plan.md）：零衍生——只呈現 statements / statement_lines 的原文，
+     對帳（逐筆合計 vs 帳單總額）由本頁現算，不落地、不改資料。
+     ① 信用卡：Σ逐筆 vs 本期新增款項（抓不到就退回本期應繳，並標示基準）
+     ② 銀行流水：分帳號「期初＋Σ收支 = 末列餘額」（期初＝首列餘額−首列金額）
+     ③ 純餘額型：只陳列，無合計可對
+     安全：所有 DB 字串一律 textContent 寫入，全檔不用 innerHTML；CDN 釘版號＋SRI。
+     ═══════════════════════════════════════════════════════════════════ -->
+<link rel="preconnect" href="https://zdfhieekhaaqfarqpslc.supabase.co">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<style>
+  :root {
+    --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
+    --accent:#0abde3; --red:#c6323c; --green:#0b7a5e; --amber:#8a6d00;
+    --line:#dfe4ea; --track:#f1f2f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#171b21; --card:#222a33; --ink:#e9eef3; --sub:#8fa1b3;
+            --line:#39434f; --track:#2d3641; --red:#ee5253; --green:#10ac84; --amber:#f6c445; }
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:"Noto Sans TC",system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:16px; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
+  h1 { font-size:20px; }
+  h2 { font-size:15px; margin-bottom:8px; }
+  button, select { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line);
+                   background:var(--card); color:var(--ink); min-height:40px; }
+  button[aria-pressed="true"] { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .muted { color:var(--sub); font-size:13px; }
+  .center { display:flex; justify-content:center; padding:40px 0; }
+  .row { display:flex; justify-content:space-between; gap:10px; align-items:baseline;
+         padding:9px 0; border-bottom:1px solid var(--line); }
+  .row:last-child { border-bottom:0; }
+  .grow { flex:1; min-width:0; }
+  .ell { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ok { color:var(--green); font-weight:600; }
+  .bad { color:var(--red); font-weight:600; }
+  .warnc { color:var(--amber); }
+  .num { font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:999px; background:var(--track);
+          color:var(--sub); font-size:12px; }
+  .clickable { cursor:pointer; }
+  .clickable:hover { background:var(--track); }
+  .scroll { overflow-x:auto; }
+  a.back { color:var(--accent); cursor:pointer; font-size:14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📑 對帳簿</h1>
+  <span class="muted" id="whoami"></span>
+  <span class="grow"></span>
+  <button id="btnSignOut" hidden>登出</button>
+</header>
+
+<div id="status" class="center">
+  <div class="card"><p id="statusMsg" role="status" aria-live="polite">載入中…</p></div>
+</div>
+
+<div id="login" hidden>
+  <div class="card">
+    <h2>請先登入</h2>
+    <p class="muted">用與家庭帳本相同的 Google 帳號登入，只會看到自己家的資料。</p>
+    <p style="margin-top:10px"><button id="btnGoogle">使用 Google 登入</button></p>
+    <p id="loginErr" class="bad" role="alert"></p>
+  </div>
+</div>
+
+<div id="errorBox" hidden>
+  <div class="card"><p id="errorMsg" class="bad" role="alert"></p></div>
+</div>
+
+<main id="main" hidden>
+  <nav style="display:flex; gap:8px; margin-bottom:12px" aria-label="檢視切換">
+    <button id="navInst" aria-pressed="true">機構總覽</button>
+    <button id="navMonth" aria-pressed="false">月份統計</button>
+  </nav>
+
+  <div id="viewInst">
+    <div class="card">
+      <h2>對帳狀態</h2>
+      <p class="muted" id="instSummary"></p>
+      <div id="instList"></div>
+    </div>
+  </div>
+
+  <div id="viewMonth" hidden>
+    <div class="card">
+      <h2>月份統計</h2>
+      <p class="muted">依帳單期別彙總；點機構可展開該期逐筆原文。</p>
+      <div id="monthList"></div>
+    </div>
+  </div>
+
+  <div id="viewDetail" hidden>
+    <div class="card">
+      <p><a class="back" id="btnBack" role="button" tabindex="0">← 返回</a></p>
+      <h2 id="detTitle"></h2>
+      <p class="muted" id="detHead"></p>
+      <div class="scroll"><div id="detLines"></div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const SUPABASE_URL = "https://zdfhieekhaaqfarqpslc.supabase.co";
+const SUPABASE_KEY = "sb_publishable_jIw3eJ0CW-rmGL7b9Wh3XQ_cQMDIegf";
+
+const $ = id => document.getElementById(id);
+const fmt = n => "NT$ " + Math.round(Number(n || 0)).toLocaleString("zh-TW");
+const el = (tag, cls, text) => { const e = document.createElement(tag);
+  if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const clear = n => n.replaceChildren();
+const VIEWS = ["status", "login", "errorBox", "main"];
+function showView(n){ for (const v of VIEWS) $(v).hidden = (v !== n); }
+function showStatus(m){ $("statusMsg").textContent = m; showView("status"); }
+function showError(m){ $("errorMsg").textContent = m; showView("errorBox"); }
+
+let sb = null, ctx = { statements: [], lines: {} };
+
+// ── 對帳：三種 scope 各自的算法（零衍生，只比對原文欄位）──────────────
+function recon(st, lines){
+  if (st.lines_scope === "purchases"){
+    const sum = lines.reduce((a, l) => a + Number(l.amount), 0);
+    const base = st.new_spend != null ? Number(st.new_spend)
+               : (st.total_due != null ? Number(st.total_due) : null);
+    if (base == null) return { kind: "none", text: "帳單未印總額，無法對帳" };
+    const diff = Math.round(sum - base);
+    return { kind: Math.abs(diff) < 1 ? "ok" : "bad", sum, base, diff,
+             basis: st.new_spend != null ? "本期新增" : "本期應繳（無新增欄）" };
+  }
+  if (st.lines_scope === "ledger"){
+    const byAcct = {};
+    for (const l of lines){
+      if (l.balance == null) continue;
+      (byAcct[l.account || ""] ||= []).push(l);
+    }
+    const accts = Object.keys(byAcct);
+    if (!accts.length) return { kind: "none", text: "此對帳單無餘額欄，僅陳列流水" };
+    let bad = 0, detail = [];
+    for (const a of accts){
+      const rows = byAcct[a];
+      const open = Number(rows[0].balance) - Number(rows[0].amount);
+      const close = Number(rows[rows.length - 1].balance);
+      const calc = open + rows.reduce((s, r) => s + Number(r.amount), 0);
+      const d = Math.round(calc - close);
+      if (Math.abs(d) >= 1) bad++;
+      detail.push({ acct: a, open, close, diff: d });
+    }
+    return { kind: bad ? "bad" : "ok", accounts: detail,
+             text: `${accts.length} 個帳號・期初＋收支＝期末` };
+  }
+  return { kind: "none", text: "純餘額對帳單，僅陳列" };
+}
+
+function statusNode(r){
+  if (r.kind === "ok") return el("span", "ok", "✓ 相符");
+  if (r.kind === "bad")
+    return el("span", "bad", r.diff != null ? `⚠ 差 ${fmt(r.diff)}` : "⚠ 有帳號對不上");
+  return el("span", "muted", r.text || "—");
+}
+
+// ── 機構總覽 ─────────────────────────────────────────────────────────
+function renderInstitutions(){
+  const box = $("instList"); clear(box);
+  const byBank = {};
+  for (const s of ctx.statements) (byBank[s.bank_name] ||= []).push(s);
+  let ok = 0, bad = 0, none = 0;
+  for (const name of Object.keys(byBank).sort()){
+    const group = byBank[name].sort((a, b) => b.period.localeCompare(a.period));
+    const head = el("div", "row");
+    const left = el("div", "grow");
+    left.append(el("div", null, name));
+    left.append(el("div", "muted", `${group.length} 期・${group[0].kind === "credit_card" ? "信用卡" : group[0].kind === "securities" ? "證券" : "銀行"}`));
+    head.append(left);
+    box.append(head);
+    for (const s of group){
+      const r = recon(s, ctx.lines[s.id] || []);
+      if (r.kind === "ok") ok++; else if (r.kind === "bad") bad++; else none++;
+      const row = el("div", "row clickable");
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      const l = el("div", "grow");
+      l.append(el("span", "pill", s.period));
+      const scope = s.lines_scope === "purchases" ? "消費明細"
+                  : s.lines_scope === "ledger" ? "存款流水" : "餘額";
+      l.append(el("span", "muted", "　" + scope + "　" + (ctx.lines[s.id] || []).length + " 筆"));
+      row.append(l);
+      row.append(statusNode(r));
+      const open = () => openDetail(s.id);
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+      box.append(row);
+    }
+  }
+  $("instSummary").textContent =
+    `共 ${ctx.statements.length} 期帳單：相符 ${ok}、對不上 ${bad}、無法對帳 ${none}（點任一期看逐筆原文）`;
+}
+
+// ── 月份統計 ─────────────────────────────────────────────────────────
+function renderMonths(){
+  const box = $("monthList"); clear(box);
+  const byPeriod = {};
+  for (const s of ctx.statements) (byPeriod[s.period] ||= []).push(s);
+  for (const p of Object.keys(byPeriod).sort().reverse()){
+    const group = byPeriod[p];
+    const head = el("div", "row");
+    const spend = group.filter(s => s.lines_scope === "purchases")
+      .reduce((a, s) => a + (ctx.lines[s.id] || []).reduce((x, l) => x + Number(l.amount), 0), 0);
+    const hl = el("div", "grow");
+    hl.append(el("strong", null, p));
+    hl.append(el("span", "muted", `　${group.length} 份對帳單`));
+    head.append(hl);
+    head.append(el("span", "num", "卡片消費 " + fmt(spend)));
+    box.append(head);
+    for (const s of group.sort((a, b) => a.bank_name.localeCompare(b.bank_name))){
+      const lines = ctx.lines[s.id] || [];
+      const r = recon(s, lines);
+      const row = el("div", "row clickable");
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      const l = el("div", "grow ell");
+      l.append(el("span", null, "　" + s.bank_name));
+      l.append(el("span", "muted", `　${lines.length} 筆`));
+      row.append(l);
+      row.append(statusNode(r));
+      const open = () => openDetail(s.id);
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+      box.append(row);
+    }
+  }
+}
+
+// ── 逐筆原文 ─────────────────────────────────────────────────────────
+function openDetail(sid){
+  const s = ctx.statements.find(x => x.id === sid);
+  const lines = ctx.lines[sid] || [];
+  const r = recon(s, lines);
+  $("detTitle").textContent = `${s.bank_name}　${s.period}`;
+  const bits = [];
+  if (s.stmt_date) bits.push("結帳日 " + s.stmt_date);
+  if (s.due_date) bits.push("繳款截止 " + s.due_date);
+  if (s.new_spend != null) bits.push("本期新增 " + fmt(s.new_spend));
+  if (s.total_due != null) bits.push("本期應繳 " + fmt(s.total_due));
+  if (s.prev_balance != null) bits.push("上期 " + fmt(s.prev_balance));
+  if (s.payments != null) bits.push("已繳 " + fmt(s.payments));
+  if (r.kind === "ok") bits.push("✓ 逐筆與帳單相符");
+  else if (r.kind === "bad" && r.diff != null)
+    bits.push(`⚠ 逐筆 ${fmt(r.sum)} vs ${r.basis} ${fmt(r.base)}，差 ${fmt(r.diff)}`);
+  else if (r.kind === "bad") bits.push("⚠ 有帳號的期初＋收支對不上期末");
+  if (r.accounts) for (const a of r.accounts)
+    bits.push(`${a.acct || "帳號"}：期初 ${fmt(a.open)} → 期末 ${fmt(a.close)}${a.diff ? "（差 " + fmt(a.diff) + "）" : ""}`);
+  bits.push("來源 " + (s.source === "ai" ? "AI 解析" : s.source === "generic" ? "通用解析" : "專屬解析器"));
+  $("detHead").textContent = bits.join("　·　");
+  const box = $("detLines"); clear(box);
+  if (!lines.length) box.append(el("p", "muted", "此期無逐筆原文"));
+  for (const l of lines){
+    const row = el("div", "row");
+    const left = el("div", "grow ell");
+    left.append(el("div", null, l.description || "（無摘要）"));
+    const sub = [l.txn_date || "", l.post_date && l.post_date !== l.txn_date ? "入帳 " + l.post_date : "",
+                 l.account || ""].filter(Boolean).join(" · ");
+    left.append(el("div", "muted", sub));
+    row.append(left);
+    const right = el("div", null);
+    right.style.textAlign = "right";
+    const amt = el("div", "num " + (Number(l.amount) < 0 ? "ok" : ""),
+                   (Number(l.amount) < 0 ? "−" : "") + fmt(Math.abs(Number(l.amount))));
+    right.append(amt);
+    if (l.balance != null) right.append(el("div", "muted num", "餘 " + fmt(l.balance)));
+    row.append(right);
+    box.append(row);
+  }
+  $("viewInst").hidden = true; $("viewMonth").hidden = true; $("viewDetail").hidden = false;
+}
+
+function bindNav(){
+  const go = which => {
+    $("viewDetail").hidden = true;
+    $("viewInst").hidden = which !== "inst";
+    $("viewMonth").hidden = which !== "month";
+    $("navInst").setAttribute("aria-pressed", String(which === "inst"));
+    $("navMonth").setAttribute("aria-pressed", String(which === "month"));
+  };
+  $("navInst").addEventListener("click", () => go("inst"));
+  $("navMonth").addEventListener("click", () => go("month"));
+  const back = () => { $("viewDetail").hidden = true;
+    $("viewInst").hidden = $("navInst").getAttribute("aria-pressed") !== "true";
+    $("viewMonth").hidden = $("navMonth").getAttribute("aria-pressed") !== "true"; };
+  $("btnBack").addEventListener("click", back);
+  $("btnBack").addEventListener("keydown", e => { if (e.key === "Enter") back(); });
+}
+
+async function pagedFetch(makeQuery){
+  const out = []; const size = 1000;
+  for (let page = 0; page < 30; page++){
+    const { data, error } = await makeQuery().range(page * size, page * size + size - 1);
+    if (error) throw error;
+    out.push(...data);
+    if (data.length < size) break;
+  }
+  return out;
+}
+
+async function afterLogin(session){
+  $("whoami").textContent = session.user.email || "";
+  $("btnSignOut").hidden = false;
+  showStatus("讀取對帳簿…");
+  try {
+    const sts = await pagedFetch(() => sb.from("statements").select("*").order("period", { ascending: false }));
+    if (!sts.length){ showError("查無對帳簿資料。請確認已在手機 App 登入同一個家庭，並跑過一次同步。"); return; }
+    const lines = await pagedFetch(() => sb.from("statement_lines").select("*").order("line_no"));
+    ctx.statements = sts;
+    ctx.lines = {};
+    for (const l of lines) (ctx.lines[l.statement_id] ||= []).push(l);
+    renderInstitutions();
+    renderMonths();
+    showView("main");
+  } catch (e){
+    showError("讀取失敗：" + (e.message || e));
+  }
+}
+
+function startLive(){
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  $("btnGoogle").addEventListener("click", async () => {
+    $("loginErr").textContent = "";
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: "google", options: { redirectTo: location.origin + location.pathname } });
+    if (error) $("loginErr").textContent = error.message;
+  });
+  $("btnSignOut").addEventListener("click", async () => { await sb.auth.signOut(); location.reload(); });
+  let started = false;
+  sb.auth.onAuthStateChange((_ev, s) => { if (s && !started){ started = true; afterLogin(s); } });
+  sb.auth.getSession().then(({ data: { session } }) => {
+    if (session){ if (!started){ started = true; afterLogin(session); } }
+    else if (!started) showView("login");
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  bindNav();
+  showStatus("載入中…");
+  const s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.53.0/dist/umd/supabase.min.js";
+  s.integrity = "sha384-H9dj4GG/hgfwNjlYa740FF9geXbzyXSgepgoobvIAW49UUAcfk+GAiBnLDIs4hRh";
+  s.crossOrigin = "anonymous";
+  s.onload = startLive;
+  s.onerror = () => showError("無法載入 Supabase 程式庫，請檢查網路連線。");
+  document.head.appendChild(s);
+});
+</script>
+</body>
+</html>
