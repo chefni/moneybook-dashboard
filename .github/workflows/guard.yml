@@ -1,0 +1,31 @@
+name: 公開內容守門
+
+# 這是 public repo（Pages 免費方案必須公開）。白名單以外的檔案一律紅燈——
+# 防的是「一次 cp *.html 把 snapshot.html（真實家庭財務快照）推上網」這種不可逆事故。
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  whitelist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
+      - name: 只允許 index.html / billbook.html / .nojekyll
+        run: |
+          bad=$(git ls-files | grep -vE '^(index|billbook)\.html$|^\.nojekyll$|^\.github/workflows/guard\.yml$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::出現白名單以外的檔案，可能外洩私人資料："
+            echo "$bad"
+            exit 1
+          fi
+          echo "✅ 檔案清單符合白名單"
+      - name: 掃機密字串
+        run: |
+          if grep -rEn 'service_role|sb_secret|app_password|pdf_password|@gmail\.com' -- *.html; then
+            echo "::error::偵測到疑似機密字串"
+            exit 1
+          fi
+          echo "✅ 無機密字串"
