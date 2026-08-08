@@ -383,7 +383,84 @@ function startLive(){
   });
 }
 
+// ── ?selftest=1：對帳演算法自我測試（不連 Supabase、不需登入）────────────────
+// 為什麼放在頁內而不是另寫測試檔：recon() 是這頁唯一會「算錯而不報錯」的地方
+// （少加一列＝顯示假差額，多加一列＝把不符顯示成相符），但它活在 inline script 裡。
+// 複製一份到測試檔＝兩份會走偏；就地自測＝永遠測到真正上線的那一份。
+// 部署後隨時可用：billbook.html?selftest=1。
+const SELFTESTS = [
+  ["信用卡：逐筆合計＝本期新增 → 相符",
+   { lines_scope: "purchases", new_spend: 300, total_due: 999 },
+   [{ line_no: 1, amount: 100 }, { line_no: 2, amount: 200 }],
+   r => r.kind === "ok" && r.sum === 300 && r.basis === "本期新增"],
+  ["信用卡：差 1 元也要抓出來",
+   { lines_scope: "purchases", new_spend: 301 },
+   [{ line_no: 1, amount: 300 }], r => r.kind === "bad" && r.diff === -1],
+  ["信用卡：沒有本期新增欄 → 退回本期應繳並標示基準",
+   { lines_scope: "purchases", new_spend: null, total_due: 500 },
+   [{ line_no: 1, amount: 500 }], r => r.kind === "ok" && r.basis.startsWith("本期應繳")],
+  ["信用卡：只有帳單頭（無逐筆）不算對不上",
+   { lines_scope: "purchases", new_spend: 500 }, [], r => r.kind === "none"],
+  ["信用卡：帳單沒印總額 → 無法對帳，不可報成不符",
+   { lines_scope: "purchases", new_spend: null, total_due: null },
+   [{ line_no: 1, amount: 1 }], r => r.kind === "none"],
+  ["流水：期初＋收支＝期末",
+   { lines_scope: "ledger" },
+   [{ line_no: 1, amount: 100, balance: 1100, account: "A" },
+    { line_no: 2, amount: -300, balance: 800, account: "A" }],
+   r => r.kind === "ok" && r.accounts[0].open === 1000 && r.accounts[0].close === 800],
+  ["流水：中間有無餘額的列，金額仍要計入（否則變假差額）",
+   { lines_scope: "ledger" },
+   [{ line_no: 1, amount: 100, balance: 1100, account: "A" },
+    { line_no: 2, amount: -50, balance: null, account: "A" },
+    { line_no: 3, amount: -250, balance: 800, account: "A" }],
+   r => r.kind === "ok"],
+  ["流水：只有一列有餘額 → 判定不足，不可假陽性相符",
+   { lines_scope: "ledger" },
+   [{ line_no: 1, amount: 100, balance: 1100, account: "A" }],
+   r => r.kind === "none" && r.accounts[0].insufficient === true],
+  ["流水：兩個帳號分開算，其中一個對不上就整張不符",
+   { lines_scope: "ledger" },
+   [{ line_no: 1, amount: 100, balance: 1100, account: "A" },
+    { line_no: 2, amount: -100, balance: 1000, account: "A" },
+    { line_no: 3, amount: 50, balance: 550, account: "B" },
+    { line_no: 4, amount: 50, balance: 999, account: "B" }],
+   r => r.kind === "bad" && r.accounts.length === 2],
+  ["流水：查詢回來的順序被打亂也要算對（不依賴排序）",
+   { lines_scope: "ledger" },
+   [{ line_no: 2, amount: -300, balance: 800, account: "A" },
+    { line_no: 1, amount: 100, balance: 1100, account: "A" }],
+   r => r.kind === "ok" && r.accounts[0].open === 1000],
+  ["純餘額型：只陳列，不宣稱相符",
+   { lines_scope: "balances" }, [{ line_no: 1, amount: 0 }], r => r.kind === "none"],
+];
+
+function runSelfTest(){
+  const box = el("div", "card");
+  let pass = 0, fail = 0;
+  for (const [name, st, lines, check] of SELFTESTS){
+    let ok = false, err = "";
+    try { ok = !!check(recon(st, lines)); }
+    catch (e){ err = " — 例外：" + (e.message || e); }
+    ok ? pass++ : fail++;
+    const row = el("div", "row");
+    row.appendChild(el("span", "grow", name + err));
+    row.appendChild(el("span", ok ? "ok" : "bad", ok ? "PASS" : "FAIL"));
+    box.appendChild(row);
+  }
+  const head = el("h2", null, `對帳演算法自我測試：${pass} 通過、${fail} 失敗`);
+  box.insertBefore(head, box.firstChild);
+  const wrap = $("status");
+  clear(wrap); wrap.appendChild(box); wrap.className = "";
+  showView("status");
+  document.title = (fail ? "❌" : "✅") + " 對帳自測";
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  if (new URLSearchParams(location.search).get("selftest") === "1"){
+    runSelfTest();
+    return;                      // 不連 Supabase、不載外部程式庫
+  }
   bindNav();
   showStatus("載入中…");
   const s = document.createElement("script");
