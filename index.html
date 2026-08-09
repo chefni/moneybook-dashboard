@@ -745,8 +745,7 @@ async function ensureRange(y, m){
   const txs = await pagedFetch(() =>
     sb.from("transactions").select("*")
       .eq("household_id", hid)
-      .neq("dedup_status", "merged")
-      .neq("dedup_status", "aux")     // v2.1 需求①：通知輔助層不進儀表板（帳單明細為唯一正式來源）
+      .neq("dedup_status", "merged")  // v60：通知回到計入（暫記），只排掉已被帳單收斂的 merged
       .gte("occurred_at", start).lt("occurred_at", end)
       .order("occurred_at", { ascending: false }));
   // 客戶端再夾一次月份邊界（防上界過濾失效）
