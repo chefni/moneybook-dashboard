@@ -237,14 +237,14 @@ const AI_CATS = STAT_CATS.map(c => c[0]).concat([OTHER_CAT]);
 const INCOME_CATS = [
   ["💰 薪資", ["薪", "薪資", "薪轉", "薪水", "代發", "獎金", "年終", "SALARY", "PAYROLL", "BONUS"]],
   ["🏦 利息", ["利息", "存息", "結息", "活息", "INTEREST"]],
-  ["📈 配息", ["股息", "配息", "股利", "現金股利", "DIVIDEND"]],
+  ["💹 配息", ["股息", "配息", "股利", "現金股利", "DIVIDEND"]],
   ["📊 賣出", ["普賣", "櫃賣", "賣出", "交割", "股票款", "股票", "SELL"]],
   ["↩️ 退款", ["退款", "退還", "退貨", "退刷", "退費", "返還", "折讓", "回饋", "REFUND", "CASHBACK"]],
   ["🔁 轉入", ["轉入", "匯入", "轉帳", "存入", "匯款", "入帳", "TRANSFER", "ATM"]]
 ];
 const OTHER_INCOME = "💵 其他收入";
-const TRUE_INCOME_CATS = ["💰 薪資", "🏦 利息", "📈 配息", "📊 賣出"];   // 規則 A 的真收入保護
-const REFUND_PROTECT_CATS = ["📊 賣出", "📈 配息", "🏦 利息"];           // 規則 B 的保護
+const TRUE_INCOME_CATS = ["💰 薪資", "🏦 利息", "💹 配息", "📊 賣出"];   // 規則 A 的真收入保護
+const REFUND_PROTECT_CATS = ["📊 賣出", "💹 配息", "🏦 利息"];           // 規則 B 的保護
 
 function statCategory(merchant){
   const t = String(merchant || "").toLowerCase();
