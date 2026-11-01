@@ -3,9 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://cdn.jsdelivr.net 'unsafe-inline'; connect-src https://zdfhieekhaaqfarqpslc.supabase.co https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://cdn.jsdelivr.net 'unsafe-inline'; connect-src 'self' https://zdfhieekhaaqfarqpslc.supabase.co https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none';">
 <meta name="referrer" content="no-referrer">
-<title>家庭帳本儀表板</title>
+<title>家計簿</title>
+<!-- 2026-11-01 PWA「家計簿」：可加到主畫面、像 App 一樣開；更新＝伺服器換檔，手機不用重裝（sw.js） -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#10ac84">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <!-- ═══════════════════════════════════════════════════════════════════
      家庭帳本儀表板 v2（2026-07-23 重寫，可公開部署版）
      設計要點：
@@ -84,8 +89,12 @@
   .err { color:var(--red); font-size:13px; min-height:18px; margin-top:10px; }
   @media (max-width:420px) {
     body { padding:12px; }
-    .grid { grid-template-columns:1fr; }
-    .big { font-size:24px; }
+    /* minmax(0,…)：不讓圖表／長金額把卡片撐出螢幕（手機版 PWA 主戰場，2026-11-01） */
+    .grid { grid-template-columns:minmax(0,1fr); gap:12px; }
+    .card { padding:14px; min-width:0; }
+    header { gap:8px; }
+    h1 { font-size:19px; }
+    .big { font-size:22px; }
   }
 </style>
 </head>
@@ -100,8 +109,8 @@
 <!-- 登入 -->
 <div id="login" class="center" hidden>
   <div class="card">
-    <h1 style="margin-bottom:8px">🏠 家庭帳本</h1>
-    <p class="muted" style="margin-bottom:18px">唯讀儀表板：登入後檢視全家收支</p>
+    <h1 style="margin-bottom:8px">🏠 家計簿</h1>
+    <p class="muted" style="margin-bottom:18px">登入後檢視全家收支，資料即時更新</p>
     <button class="primary" style="width:100%" id="btnGoogle">使用 Google 登入</button>
     <p class="err" id="loginErr"></p>
   </div>
@@ -110,7 +119,7 @@
 <!-- 非家庭成員 -->
 <div id="nomember" class="center" hidden>
   <div class="card">
-    <h1 style="margin-bottom:12px">🏠 家庭帳本</h1>
+    <h1 style="margin-bottom:12px">🏠 家計簿</h1>
     <p>此帳號不是家庭成員，請先在手機 App 用邀請碼加入。</p>
     <p class="muted" style="margin:10px 0 18px">加入後重新整理本頁即可。</p>
     <button id="btnSignOut2">登出</button>
@@ -129,16 +138,18 @@
 <!-- 主畫面 -->
 <div id="app" hidden>
   <header>
-    <h1>🏠 家庭帳本</h1>
+    <h1>🏠 家計簿</h1>
     <button class="nav" id="btnPrev" title="上個月">◀</button>
     <select id="monthSel"></select>
     <button class="nav" id="btnNext" title="下個月">▶</button>
     <span class="spacer"></span>
     <span id="demoBadge" class="badge" hidden>示範模式（合成資料）</span>
+    <button id="btnSync" hidden>🔄 立即同步</button>
     <a href="./billbook.html" style="color:var(--accent);font-size:14px">📑 對帳簿</a>
     <span id="who" class="muted"></span>
     <button id="btnSignOut" hidden>登出</button>
   </header>
+  <p class="muted" id="syncMsg" role="status" aria-live="polite" style="margin:-6px 0 12px"></p>
 
   <div class="chips" id="chips"></div>
 
@@ -734,14 +745,14 @@ async function loadStatic(){
   ctx.members = members.slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   ctx.accounts = accounts;
 }
-async function ensureRange(y, m){
+async function ensureRange(y, m, quiet){
   const [sy, smn] = ymAdd(y, m, -5);
   const start = ms(sy, smn);
   const [ny, nm] = ymAdd(y, m, 1);
   const end = ms(ny, nm);
   const r = ctx.loadedRange;
   if (r && r.start <= start && r.end >= end) return;
-  showStatus("讀取交易資料中…");
+  if (!quiet) showStatus("讀取交易資料中…");   // 背景更新不切到載入畫面，免得畫面閃一下
   const txs = await pagedFetch(() =>
     sb.from("transactions").select("*")
       .eq("household_id", hid)
@@ -761,7 +772,7 @@ async function ensureRange(y, m){
   }
   ctx.acctTxs = acct.filter(a => a.occurred_at >= start && a.occurred_at < end);
   ctx.loadedRange = { start, end };
-  showView("app");
+  if (!quiet) showView("app");
 }
 
 async function render(){
@@ -774,6 +785,129 @@ async function render(){
     console.error(e);
     showError("讀取資料失敗：" + (e && e.message ? e.message : e));
   }
+}
+
+/* ═══════════ 即時更新（2026-11-01 家計簿） ═══════════ */
+// 資料有變才重抓：比對「最新一筆交易的建立時間＋雲端最後撈取／同步完成時間」。
+// 畫面開著每分鐘看一次；從背景切回來時直接整份重抓（App 上改分類這種不會動到上述時間的也一併跟上）。
+const LIVE_EVERY = 60_000;
+let liveMark = null, refreshing = false;
+
+async function dataMark(){
+  const one = q => q.limit(1).then(({ data, error }) => { if (error) throw error; return data && data[0]; });
+  const [t, s, r] = await Promise.all([
+    one(sb.from("transactions").select("created_at").eq("household_id", hid)
+          .order("created_at", { ascending: false })),
+    one(sb.from("ingest_settings").select("last_run_at").eq("household_id", hid)),
+    one(sb.from("sync_requests").select("finished_at").eq("household_id", hid).eq("status", "done")
+          .order("finished_at", { ascending: false }))
+  ]);
+  return [t?.created_at, s?.last_run_at, r?.finished_at].join("|");
+}
+
+async function refreshData(){
+  if (refreshing || $("app").hidden) return;
+  refreshing = true;
+  try {
+    await loadStatic();
+    ctx.loadedRange = null;
+    const [y, m] = $("monthSel").value.split("-").map(Number);
+    await ensureRange(y, m, true);
+    paint();
+    liveMark = await dataMark();
+  } catch (e){
+    console.warn("背景更新失敗，下次再試", e);   // 畫面留著上一份資料，不跳錯誤頁
+  } finally { refreshing = false; }
+}
+
+async function checkLive(){
+  if (document.hidden || refreshing) return;
+  try {
+    const mark = await dataMark();
+    if (liveMark !== null && mark !== liveMark) await refreshData();
+    else liveMark = mark;
+  } catch (e){ console.warn("檢查更新失敗", e); }
+}
+
+// 頁面本身有新版（伺服器上的 index.html 換了）→ 切回來時自動重新載入，等於 App 自動更新
+let pageTag = null;
+async function pageVersion(){
+  const res = await fetch(location.pathname, { method: "HEAD", cache: "no-store" });
+  return res.headers.get("etag") || res.headers.get("last-modified");
+}
+
+function startLiveUpdates(){
+  liveMark = null;
+  checkLive();
+  setInterval(checkLive, LIVE_EVERY);
+  pageVersion().then(v => { pageTag = v; }).catch(() => {});
+  document.addEventListener("visibilitychange", async () => {
+    if (document.hidden) return;
+    try {
+      const v = await pageVersion();
+      if (pageTag && v && v !== pageTag && !syncing){ location.reload(); return; }
+    } catch (_){ /* 離線：照用目前這版 */ }
+    refreshData();
+  });
+}
+
+/* ═══════════ 立即同步（同 App：寫 sync_requests → 雲端撈信 → 輪詢到完成） ═══════════ */
+// DB 端有兩道防連點（60 秒節流、同家庭只允許一筆進行中）；錯誤翻成白話，不把 SQL 訊息丟給使用者。
+let syncing = false;
+
+function hhmm(iso){
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+async function showLastSync(prefix = ""){
+  const { data } = await sb.from("ingest_settings").select("last_run_at, last_error")
+                           .eq("household_id", hid).limit(1);
+  const s = data && data[0];
+  const { data: done } = await sb.from("sync_requests").select("finished_at")
+    .eq("household_id", hid).eq("status", "done").order("finished_at", { ascending: false }).limit(1);
+  const last = [s?.last_run_at, done?.[0]?.finished_at].filter(Boolean).sort().pop();
+  $("syncMsg").textContent = prefix + (last ? `上次同步 ${hhmm(last)}` : "") +
+                             (s?.last_error ? "　⚠️ 上次撈取有錯誤，請到 App 的同步頁查看" : "");
+}
+async function watchSync(id){
+  syncing = true;
+  $("btnSync").disabled = true;
+  let st = "pending";
+  for (let i = 0; i < 360 && st !== "done" && st !== "failed"; i++){   // 上限 30 分鐘
+    await new Promise(r => setTimeout(r, 5000));
+    const { data } = await sb.from("sync_requests").select("status").eq("id", id).limit(1);
+    st = data?.[0]?.status || st;
+  }
+  syncing = false;
+  $("btnSync").disabled = false;
+  if (st === "done"){ await refreshData(); await showLastSync("✅ 同步完成，畫面已更新　"); }
+  else if (st === "failed") $("syncMsg").textContent = "❌ 這次撈取失敗了；資料沒有遺失，下次同步會重撈同一段時間";
+  else $("syncMsg").textContent = "⚠️ 同步逾時（超過 30 分鐘），請稍後再試";
+}
+async function startSync(){
+  if (syncing) return;
+  $("syncMsg").textContent = "同步中…已送出，雲端撈取中（約 1～3 分鐘）";
+  const { data, error } = await sb.from("sync_requests").insert({ household_id: hid }).select("id").single();
+  if (error || !data){
+    const m = (error && error.message) || "";
+    $("syncMsg").textContent = m.includes("過於頻繁") ? "⏳ 剛剛才同步過，請等約一分鐘再按"
+      : (m.includes("uniq_sync_pending") || m.includes("duplicate key")) ? "⏳ 已有一次同步在進行中，完成後畫面會自己更新"
+      : "❌ 送出失敗，請確認網路後再試";
+    return;
+  }
+  watchSync(data.id);
+}
+async function initSync(){
+  $("btnSync").hidden = false;
+  $("btnSync").addEventListener("click", startSync);
+  // 別的裝置（或 App）按了同步還沒跑完 → 接著等，完成時一樣自動更新
+  const since = new Date(Date.now() - 30 * 60_000).toISOString();
+  const { data } = await sb.from("sync_requests").select("id").eq("household_id", hid)
+    .not("status", "in", "(done,failed)").gte("requested_at", since)
+    .order("requested_at", { ascending: false }).limit(1);
+  if (data && data.length){ $("syncMsg").textContent = "同步中…雲端撈取尚未完成"; watchSync(data[0].id); }
+  else await showLastSync();
 }
 
 /* ═══════════ 啟動流程 ═══════════ */
@@ -820,6 +954,8 @@ async function afterLogin(session){
     buildMonthOptions();
     buildChips();
     await render();
+    startLiveUpdates();
+    initSync().catch(e => console.warn("同步狀態讀取失敗", e));
   } catch (e){
     console.error(e);
     showError("初始化失敗：" + (e && e.message ? e.message : e));
@@ -853,6 +989,8 @@ function startLive(){
 document.addEventListener("DOMContentLoaded", boot);
 function boot(){
 bindNav();
+// PWA：註冊 service worker（可安裝到主畫面＋離線時仍打得開）；不支援的瀏覽器照常當網頁用
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 if (DEMO){
   startDemo();
 } else {
