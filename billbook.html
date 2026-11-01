@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://cdn.jsdelivr.net 'unsafe-inline'; connect-src https://zdfhieekhaaqfarqpslc.supabase.co https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.53.0/dist/umd/supabase.min.js 'unsafe-inline'; connect-src https://zdfhieekhaaqfarqpslc.supabase.co; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none';">
 <meta name="referrer" content="no-referrer">
 <title>對帳簿</title>
 <!-- ═══════════════════════════════════════════════════════════════════
@@ -23,7 +23,9 @@
     --accent:#0abde3; --red:#c6323c; --green:#0b7a5e; --amber:#8a6d00;
     /* --accent 當底色/文字只有 2.2:1，戶外看不見；文字與選中態一律用 --accent-ink（5.6:1） */
     --accent-ink:#0b7285;
+    --accent-fill:#0b7285;   /* 白字的底色：深淺色模式都用深色，白字才看得清 */
     --line:#dfe4ea; --track:#f1f2f6;
+    color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg:#171b21; --card:#222a33; --ink:#e9eef3; --sub:#8fa1b3;
@@ -37,7 +39,7 @@
   h2 { font-size:15px; margin-bottom:8px; }
   button, select { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line);
                    background:var(--card); color:var(--ink); min-height:40px; }
-  button[aria-pressed="true"] { background:var(--accent-ink); color:#fff; border-color:var(--accent-ink); }
+  button[aria-pressed="true"] { background:var(--accent-fill); color:#fff; border-color:var(--accent-fill); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
   .muted { color:var(--sub); font-size:13px; }
   .center { display:flex; justify-content:center; padding:40px 0; }
@@ -123,6 +125,8 @@
 </main>
 
 <script>
+// 被別的網站用 iframe 框起來（點擊劫持）就整頁不顯示；GitHub Pages 無法送 X-Frame-Options 標頭
+if (window.top !== window.self) document.documentElement.hidden = true;
 const SUPABASE_URL = "https://zdfhieekhaaqfarqpslc.supabase.co";
 const SUPABASE_KEY = "sb_publishable_jIw3eJ0CW-rmGL7b9Wh3XQ_cQMDIegf";
 
@@ -305,7 +309,9 @@ function openDetail(sid){
     row.append(right);
     box.append(row);
   }
+  ctx.scrollBack = window.scrollY;   // 返回時回到原本看的位置
   $("viewInst").hidden = true; $("viewMonth").hidden = true; $("viewDetail").hidden = false;
+  window.scrollTo(0, 0);             // 從長清單下方點進來也要看得到標題
 }
 
 function bindNav(){
@@ -320,7 +326,8 @@ function bindNav(){
   $("navMonth").addEventListener("click", () => go("month"));
   const back = () => { $("viewDetail").hidden = true;
     $("viewInst").hidden = $("navInst").getAttribute("aria-pressed") !== "true";
-    $("viewMonth").hidden = $("navMonth").getAttribute("aria-pressed") !== "true"; };
+    $("viewMonth").hidden = $("navMonth").getAttribute("aria-pressed") !== "true";
+    window.scrollTo(0, ctx.scrollBack || 0); };
   $("btnBack").addEventListener("click", back);
   $("btnBack").addEventListener("keydown", e => { if (e.key === "Enter") back(); });
 }
@@ -376,7 +383,10 @@ function startLive(){
   });
   $("btnSignOut").addEventListener("click", async () => { await sb.auth.signOut(); location.reload(); });
   let started = false;
-  sb.auth.onAuthStateChange((_ev, s) => { if (s && !started){ started = true; afterLogin(s); } });
+  sb.auth.onAuthStateChange((ev, s) => {
+    if (ev === "SIGNED_OUT"){ showView("login"); return; }   // 登入過期／在別處登出：回登入頁，不要看起來像沒資料
+    if (s && !started){ started = true; afterLogin(s); }
+  });
   sb.auth.getSession().then(({ data: { session } }) => {
     if (session){ if (!started){ started = true; afterLogin(session); } }
     else if (!started) showView("login");

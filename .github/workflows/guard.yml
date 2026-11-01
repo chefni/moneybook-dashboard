@@ -22,13 +22,24 @@ jobs:
             exit 1
           fi
           echo "✅ 檔案清單符合白名單"
+      # 與 deploy.ps1 同一組樣式、不分大小寫（-i）。用 --include 而不是 *.js 這種 glob：
+      # glob 沒展開時 grep 會回 exit 2，被 if 當成「沒找到」而無聲通過。
       - name: 掃機密字串
         run: |
-          if grep -rEn 'service_role|sb_secret|app_password|pdf_password|@gmail\.com' -- *.html *.js *.webmanifest; then
-            echo "::error::偵測到疑似機密字串"
-            exit 1
-          fi
+          pat='service_role|sb_secret|sbp_|app_password|pdf_password|ghp_|github_pat_|sk-ant-|GOCSPX-|BEGIN [A-Z ]*PRIVATE KEY|eyJ[A-Za-z0-9_-]{15,}\.eyJ|postgres(ql)?://[^ ]+:[^ ]+@|@(gmail|hotmail|outlook|yahoo)\.|tmu\.edu\.tw|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+          set +e
+          # -l＝只列檔名：公開 repo 的 CI 紀錄誰都看得到，命中的那一行（可能就是機密本身）不能印出來
+          grep -rEli --include='*.html' --include='*.js' --include='*.webmanifest' --exclude-dir=.git "$pat" .
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then echo "::error::偵測到疑似機密字串"; exit 1; fi
+          if [ $rc -ne 1 ]; then echo "::error::掃描本身失敗（grep exit $rc）"; exit 1; fi
           echo "✅ 無機密字串"
+      - name: 單檔大小上限（頁面暴增多半是有人把資料貼進去）
+        run: |
+          big=$(find . -path ./.git -prune -o -type f \( -name '*.html' -o -name '*.js' \) -size +200k -print)
+          if [ -n "$big" ]; then echo "::error::檔案超過 200KB：$big"; exit 1; fi
+          echo "✅ 大小正常"
       # 對帳演算法會「算錯而不報錯」（少加一列＝假差額，多加一列＝把不符顯示成相符），
       # 是這兩頁唯一無法靠肉眼看出來的邏輯。跑頁內那一份 recon()，不另外複製演算法。
       - name: 對帳演算法自測

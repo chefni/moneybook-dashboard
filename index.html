@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; connect-src 'self' https://zdfhieekhaaqfarqpslc.supabase.co https://accounts.google.com; style-src 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.53.0/dist/umd/supabase.min.js 'unsafe-inline'; connect-src 'self' https://zdfhieekhaaqfarqpslc.supabase.co; style-src 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none';">
 <meta name="referrer" content="no-referrer">
 <title>家計簿</title>
 <!-- ═══════════════════════════════════════════════════════════════════
@@ -14,7 +14,8 @@
      設計要點：
      1. 無寫死家庭識別碼：登入後查 household_members 取 household_id；非成員只顯示提示。
      2. 安全靠 RLS；publishable key 出現在原始碼是官方設計。
-     3. 寫入只有兩種：立即同步（sync_requests）、訂閱「非訂閱」（RPC set_subscription_ignore）。
+     3. 寫入（全部受 RLS 限家庭成員）：立即同步（sync_requests）、「非訂閱」（RPC set_subscription_ignore）、
+        改分類（RPC set_category_rule）、行程（trips 新增/刪除）、行程單筆例外（trip_tx）。
      4. XSS：DB 字串一律 textContent，全檔不用 innerHTML。
      5. ?demo=1：不連 Supabase，用頁內合成資料渲染（部署前預覽用；資料皆虛構）。
      部署見 DEPLOY.md（白名單腳本 deploy.ps1）。⚠️ private\ 內含真實資料，絕不可部署。
@@ -29,19 +30,24 @@
 <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"
         integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
         crossorigin="anonymous"></script>
-<script defer src="classify_data.js"></script>
-<script defer src="engine.js"></script>
+<!-- ?v=：deploy.ps1 出貨時換成兩檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面 -->
+<script defer src="classify_data.js?v=a1c35e2fe75c"></script>
+<script defer src="engine.js?v=a1c35e2fe75c"></script>
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
     --accent:#0abde3; --red:#c6323c; --green:#0b7a5e;
+    /* --accent 當文字或白字底色只有 2.2:1，戶外看不見；文字與選中態一律用 --accent-ink（5.6:1），同 billbook */
+    --accent-ink:#0b7285;
+    --accent-fill:#0b7285;   /* 白字的底色（按鈕、選中、徽章）：深淺色模式都用深色，白字才看得清 */
     --line:#dfe4ea; --track:#f1f2f6; --soft:#eef7fb;
+    color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg:#171b21; --card:#222a33; --ink:#e9eef3; --sub:#8fa1b3;
       --line:#39434f; --track:#2d3641; --soft:#1d2b35;
-      --red:#ee5253; --green:#10ac84;
+      --red:#ee5253; --green:#10ac84; --accent-ink:#0abde3;
     }
   }
   * { box-sizing:border-box; margin:0; }
@@ -52,8 +58,8 @@
   select,button,input { font:inherit; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
   button { cursor:pointer; }
   button:disabled { opacity:.45; cursor:default; }
-  button.primary { background:var(--accent); color:#fff; border:none; }
-  button.link { border:none; background:none; color:var(--accent); padding:4px 6px; font-size:13px; }
+  button.primary { background:var(--accent-fill); color:#fff; border:none; }
+  button.link { border:none; background:none; color:var(--accent-ink); padding:4px 8px; font-size:13px; min-height:40px; }
   .spacer { flex:1; }
   .card { background:var(--card); border-radius:14px; padding:18px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
   .muted { color:var(--sub); font-size:13px; }
@@ -63,9 +69,9 @@
   .center .card { padding:32px 24px; }
   .err { color:var(--red); font-size:13px; min-height:18px; margin-top:10px; }
   .chips { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 10px; }
-  .chip { border-radius:999px; padding:5px 13px; font-size:13px; }
-  .chip.active { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .badge { background:var(--accent); color:#fff; border-radius:6px; padding:3px 8px; font-size:12px; }
+  .chip { border-radius:999px; padding:5px 13px; font-size:13px; min-height:36px; }
+  .chip.active { background:var(--accent-fill); border-color:var(--accent-fill); color:#fff; }
+  .badge { background:var(--accent-fill); color:#fff; border-radius:6px; padding:3px 8px; font-size:12px; }
 
   /* 期間列：◀ 標題 ▶，點標題開選單（同 App PeriodBar） */
   .period { display:flex; align-items:center; justify-content:space-between; }
@@ -81,7 +87,7 @@
   .fold > .head { display:block; width:100%; text-align:left; border:none; border-radius:0; background:none; padding:12px 16px; }
   .fold > .head .t { display:flex; align-items:center; gap:8px; font-weight:600; font-size:16px; }
   .fold > .head .t span:first-child { flex:1; }
-  .fold > .head .tog { color:var(--accent); font-size:12px; font-weight:400; }
+  .fold > .head .tog { color:var(--accent-ink); font-size:12px; font-weight:400; }
   .fold > .head .sum { color:var(--sub); font-size:13px; margin-top:2px; }
   .fold > .body { padding:0 16px 14px; }
   .row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; padding:6px 0; font-size:14px; }
@@ -114,7 +120,9 @@
   .srccard small { display:block; color:var(--sub); font-size:12px; }
   .srccard b { font-size:15px; }
   .tabs { display:flex; gap:6px; margin-bottom:8px; }
-  canvas { max-height:280px; }
+  .cwrap { position:relative; }
+  .cwrap canvas { max-height:280px; }
+  .cwrap[style*="height"] canvas { max-height:none; }
   .sub { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
   .sub .m { flex:1; min-width:0; }
   .exrow { display:flex; gap:10px; align-items:baseline; padding:5px 0; font-size:13px; color:var(--sub); border-bottom:1px dashed var(--line); }
@@ -131,7 +139,7 @@
   .txrow .m > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .txrow.off { color:var(--sub); }
   .txrow.off .a { text-decoration:line-through; }
-  .txrow small.hint { color:var(--accent); }
+  .txrow small.hint { color:var(--accent-ink); }
   .link.danger { color:var(--red); }
   .dlg { margin:auto; border:none; border-radius:14px; padding:0;   /* margin:auto＝置中（* 的 margin:0 會蓋掉瀏覽器預設） */ width:min(520px, calc(100vw - 24px)); max-height:85vh;
          background:var(--card); color:var(--ink); box-shadow:0 8px 30px rgba(0,0,0,.3); }
@@ -169,7 +177,8 @@
   <div class="card">
     <h1 style="margin-bottom:12px">🏠 家計簿</h1>
     <p>此帳號不是家庭成員，請先在手機 App 用邀請碼加入。</p>
-    <p class="muted" style="margin:10px 0 18px">加入後重新整理本頁即可。</p>
+    <p class="muted" style="margin:10px 0 18px">加入後按「重新檢查」即可。</p>
+    <button class="primary" id="btnRecheck">重新檢查</button>
     <button id="btnSignOut2">登出</button>
   </div>
 </div>
@@ -188,10 +197,11 @@
     <span class="spacer"></span>
     <span id="demoBadge" class="badge" hidden>示範模式（合成資料）</span>
     <button id="btnSync" hidden>🔄 立即同步</button>
-    <a href="./billbook.html" style="color:var(--accent);font-size:14px">📑 對帳簿</a>
+    <a href="./billbook.html" style="color:var(--accent-ink);font-size:14px">📑 對帳簿</a>
     <button id="btnSignOut" hidden>登出</button>
   </header>
   <p class="muted" id="syncMsg" role="status" aria-live="polite"></p>
+  <p class="warn" id="netMsg" role="alert" hidden></p>
   <div class="chips" id="chips"></div>
 
   <div class="period">
@@ -205,6 +215,7 @@
     <div class="row"><span>月份</span><input type="month" id="pickMonth"><button id="btnPickMonth">前往</button></div>
     <div class="row"><span>自訂</span><input type="date" id="pickStart"><span>～</span><input type="date" id="pickEnd">
       <button id="btnPickRange">套用</button></div>
+    <p class="warn" id="pickErr" role="alert"></p>
   </div>
 
   <div id="sections"></div>
@@ -216,6 +227,8 @@
 
 <script>
 "use strict";
+// 被別的網站用 iframe 框起來（點擊劫持）就整頁不顯示；GitHub Pages 無法送 X-Frame-Options 標頭，只能這樣擋
+if (window.top !== window.self) document.documentElement.hidden = true;
 /* ═══════════ 基本設定 ═══════════ */
 // Supabase publishable key 出現在原始碼是官方設計（安全靠 RLS），不是洩漏。
 const SUPABASE_URL = "https://zdfhieekhaaqfarqpslc.supabase.co";
@@ -252,28 +265,29 @@ function showError(msg){ $("errorMsg").textContent = msg; showView("errorBox"); 
 async function pagedFetch(mk){
   // ⚠️ 伺服器每次最多回 1000 列：一定要分頁。App 的 limit(5000) 只拿到 1000 列，
   //    近 6 月趨勢與訂閱偵測因此少算（2026-11-01 對照實測抓到）——網頁版不重蹈。
-  let out = [];
+  // 排序一定補上 id 當尾鍵：只排日期的話同一天的列在不同頁之間順序不固定，跨頁會重複或漏列
+  // （billbook 踩過）。再用 id 去重當保險。
+  const seen = new Map();
   for (let page = 0; ; page++){
-    const { data, error } = await mk().range(page * 1000, page * 1000 + 999);
+    const { data, error } = await mk().order("id").range(page * 1000, page * 1000 + 999);
     if (error) throw error;
-    out = out.concat(data || []);
-    if (!data || data.length < 1000) return out;
+    for (const r of data || []) seen.set(r.id, r);
+    if (!data || data.length < 1000) return [...seen.values()];
   }
 }
-async function selAll(table, order){
+const selAll = (table, order) => pagedFetch(() => {
   const q = sb.from(table).select("*").eq("household_id", hid);
-  const { data, error } = await (order ? q.order(order) : q);
-  if (error) throw error;
-  return data || [];
-}
+  return order ? q.order(order) : q;
+});
 async function loadStatic(){
   const [members, accounts, catRules, labels, excludeRules, filterRules, cats, ign] = await Promise.all([
     selAll("members", "sort_order"), selAll("asset_accounts", "sort_order"), selAll("category_rules"),
     selAll("category_labels", "sort_order"), selAll("exclude_rules"), selAll("filter_rules"),
-    selAll("categories", "sort_order"), selAll("subscription_ignores").catch(() => [])
+    selAll("categories", "sort_order"),
+    selAll("subscription_ignores").catch(e => { console.warn("非訂閱清單讀取失敗", e); return null; })
   ]);
   Object.assign(S, { members, accounts, catRules: E.sortCategoryRules(catRules), labels, excludeRules,
-                     filterRules, cats, subIgnores: new Set(ign.map(r => r.pattern)) });
+                     filterRules, cats, subIgnoreErr: ign == null, subIgnores: new Set((ign || []).map(r => r.pattern)) });
 }
 const txRange = (a, b) => pagedFetch(() => sb.from("transactions").select("*")
   .eq("household_id", hid).eq("dedup_status", "unique")
@@ -283,8 +297,9 @@ const txRange = (a, b) => pagedFetch(() => sb.from("transactions").select("*")
 function addDays(t, n){ return new Date(Date.parse(t + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10); }
 const periodKey = p => JSON.stringify(p);
 
+let cacheGen = 0;   // 每次清快取 +1：清之前就發出、清之後才回來的舊資料不寫回快取
 async function loadPeriod(p){
-  const key = periodKey(p);
+  const key = periodKey(p), gen = cacheGen;
   if (periodCache.has(key)) return periodCache.get(key);
   const P = E.Period, pv = P.prev(p), an = P.anchorMonth(p);
   const [y5, m5] = E.ymAdd(an.y, an.m, -5), [y1, m1] = E.ymAdd(an.y, an.m, 1);
@@ -298,27 +313,50 @@ async function loadPeriod(p){
       .gte("occurred_at", ws).lt("occurred_at", we).order("occurred_at", { ascending: false })) : []
   ]);
   const d = { txs, prevTxs, range6, acctTxnsWide };
-  periodCache.set(key, d);
+  if (gen === cacheGen) periodCache.set(key, d);
   return d;
 }
 
 /* ═══════════ 繪製 ═══════════ */
+// 每次 render 編號：網路慢時連點 ◀，晚回來的舊月份資料不能蓋掉新畫面（否則標題 6 月、數字 7 月）
+let renderSeq = 0;
 async function render(quiet){
+  const my = ++renderSeq, p = period;
   try {
-    if (!quiet) showStatus("讀取資料中…");
-    const d = DEMO ? demoPeriod(period) : await loadPeriod(period);
+    // 已經有畫面時切月份不整頁換成「讀取中」（捲動位置不跳），只在標題下提示
+    if (!quiet){ if (lastData) $("periodLabel").textContent = E.Period.label(p) + "　讀取中…"; else showStatus("讀取資料中…"); }
+    const d = DEMO ? demoPeriod(p) : await loadPeriod(p);
+    if (my !== renderSeq) return;
     showView("app");
-    paint(d);
+    paint(d, p);
+    netOk();
   } catch (e){
+    if (my !== renderSeq) return;
     console.error(e);
-    if (quiet) console.warn("背景更新失敗，畫面保留上一份", e);
+    if (lastData){   // 有舊畫面就留著，頂端說清楚；期間退回畫面上那一期（不然再按 ◀ 會從沒顯示過的月份往前跳）
+      if (!quiet && lastPeriod) period = lastPeriod;
+      netFail(e, quiet ? null : E.Period.label(p));
+      paintPeriodBar();
+    }
     else showError("讀取資料失敗：" + (e && e.message ? e.message : e));
   }
 }
+/** 背景更新失敗要講：不然離線時畫面看起來正常，其實是舊的 */
+let shownAt = null;
+function netOk(){ shownAt = new Date(); $("netMsg").hidden = true; }
+function netFail(e, what){
+  console.warn("讀取失敗，畫面保留上一份", e);
+  const head = what ? `⚠️ ${what} 讀取失敗，` : "⚠️ ";
+  $("netMsg").textContent = navigator.onLine === false || /fetch|network/i.test(String(e && e.message))
+    ? `${head}目前連不上伺服器，顯示的是 ${shownAt ? hhmm(shownAt.toISOString()) : "先前"} 的資料；恢復連線後會自動更新`
+    : `${head}讀取最新資料失敗：` + (e && e.message ? e.message : e);
+  $("netMsg").hidden = false;
+}
 
 function paintPeriodBar(){
-  $("periodLabel").textContent = E.Period.label(period);
-  $("btnNext").disabled = !E.Period.canNext(period);
+  const p = lastPeriod || period;
+  $("periodLabel").textContent = E.Period.label(p);
+  $("btnNext").disabled = !E.Period.canNext(p);
 }
 function buildChips(){
   const box = $("chips");
@@ -356,33 +394,47 @@ function sbar(label, amount, max, total, opts = {}){
   const fill = el("div");
   fill.style.width = (max > 0 ? Math.min(1, Math.max(0.02, amount / max)) : 0.02) * 100 + "%";
   w.appendChild(add(tr, fill));
-  if (opts.onClick){ w.setAttribute("role", "button"); w.tabIndex = 0; w.addEventListener("click", opts.onClick); }
+  if (opts.onClick){
+    w.setAttribute("role", "button"); w.tabIndex = 0; w.addEventListener("click", opts.onClick);
+    w.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); opts.onClick(); } });
+  }
   return w;
 }
+/** 新到舊；同日維持原順序（比較器相等要回 0，否則排序不穩定） */
+const newestFirst = (dateOf = t => t.occurred_at) => (a, b) => (dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0);
 /** 展開的逐筆（同 App SourceDetail） */
 function detail(rows, total, nameOf = t => t.merchant || t.note || "（無商家）", dateOf = t => t.occurred_at){
   const box = el("div", "detail");
-  for (const t of rows.slice().sort((a, b) => (dateOf(a) < dateOf(b) ? 1 : -1)))
+  for (const t of rows.slice().sort(newestFirst(dateOf)))
     add(box, add(el("div", "r"), el("span", null, `${dateOf(t).slice(5)}  ${nameOf(t)}`), el("span", null, nt(t.amount))));
   add(box, add(el("div", "r tot"), el("span", null, `共 ${rows.length} 筆`), el("span", null, nt(total))));
   return box;
 }
 function toggleBar(key){ ui.bars.has(key) ? ui.bars.delete(key) : ui.bars.add(key); repaint(); }
 
-let lastData = null;
-function repaint(){ if (lastData) paint(lastData); }
+let lastData = null, lastPeriod = null;
+function repaint(){
+  if (!lastData) return;
+  try { paint(lastData, lastPeriod); }
+  catch (e){ console.error(e); $("netMsg").textContent = "⚠️ 畫面繪製失敗：" + (e && e.message ? e.message : e); $("netMsg").hidden = false; }
+}
+const tripFold = () => fold("trip", "✈️ 旅遊", tripState
+  ? `${tripState.trips.length} 趟行程` : "跨月的行程總花費（點開才載入）", paintTrips);
 
-function paint(d){
-  lastData = d;
+/** d＝期間資料，p＝這份資料所屬的期間（不用全域 period：兩者必須成對） */
+function paint(d, p){
+  lastData = d; lastPeriod = p;
   paintPeriodBar();
   for (const c of charts) c.destroy();
   charts = [];
-  const r = E.analyze({ ...S, ...d }, period, sel);
+  const r = E.analyze({ ...S, ...d }, p, sel);
   const L = k => E.labelOf(k, S.labels);
   const root = $("sections");
   root.replaceChildren();
-  if (!r.exp.length && !r.income.length && !d.txs.length){
+  const mineN = sel == null ? d.txs.length : d.txs.filter(t => E.txOwnerId(t, S.members) === sel).length;
+  if (!mineN && !r.income.length){   // 同 App：依成員篩選後判斷
     root.appendChild(add(el("div", "card"), el("p", "muted", "本期尚無資料")));
+    root.appendChild(tripFold());     // 旅遊跟期間無關，照樣可以看
     return;
   }
   const { te, prevTe, ti } = r;
@@ -408,10 +460,15 @@ function paint(d){
   const f = r.fin;
   if (f.realInc > 0 || f.investIn > 0 || f.investOut > 0 || f.consumption > 0){
     const pct = v => (v == null ? "—" : `${v}%`);
-    root.appendChild(fold("fin", "💎 理財指標（本期）", `儲蓄率 ${pct(f.savingRate)} · 投資投入 ${nt(f.investIn)}`, b => {
+    // 收入很少時比率會變成 −20000% 這種沒意義的數字：支出超過收入兩倍就改講白話
+    const saving = f.savingRate == null ? "—（本期沒有收入）"
+      : f.savingRate < -100 ? `支出是收入的 ${Math.round(f.consumption / f.realInc)} 倍` : `${f.savingRate}%`;
+    root.appendChild(fold("fin", "💎 理財指標（本期）", `儲蓄率 ${saving} · 投資投入 ${nt(f.investIn)}`, b => {
       add(b, el("p", "note", "買股票＝投資投入（不算消費）；賣股＝投資回收（不算收入，資產轉移）；內部轉入不算真實收入。儲蓄率＝(真實收入−消費)/真實收入。"),
         row("真實收入（不含轉入/賣股）", nt(f.realInc)), row("消費支出（不含投資）", nt(f.consumption)),
-        row("儲蓄率", pct(f.savingRate), (f.savingRate || 0) >= 0 ? "income" : "expense"),
+        row("儲蓄率", saving, (f.savingRate || 0) >= 0 ? "income" : "expense"),
+        f.savingRate != null && f.savingRate < -100
+          ? el("p", "note", "收入只算到有進帳紀錄的帳戶；薪資若入在還沒接上的帳戶，這裡會偏低。") : null,
         row("本期投資投入（買入）", nt(f.investIn)),
         f.investOut > 0 ? row("本期投資回收（賣出）", nt(f.investOut)) : null,
         row("投資率（投入/真實收入）", pct(f.investRate)), row("被動收入（利息+配息）", nt(f.passive)));
@@ -448,8 +505,13 @@ function paint(d){
       const cv = el("canvas");
       cv.setAttribute("role", "img");
       cv.setAttribute("aria-label", "支出圖表（數值見下方分類清單）");
-      add(b, tabs, cv);
-      requestAnimationFrame(() => drawChart(cv, byCat, r.trend6));
+      // 橫條圖的高度跟著分類數長（固定比例的話分類一多就擠成一團）
+      const box = el("div", "cwrap");
+      if (ui.chart === 1) box.style.height = Math.max(160, byCat.length * 26 + 30) + "px";
+      add(b, tabs, add(box, cv));
+      if (!window.Chart) add(b, el("p", "warn", "圖表程式庫沒載入（可能網路不穩），下方數字不受影響。"));
+      else requestAnimationFrame(() => drawChart(cv, byCat, r.trend6));
+      if (ui.chart === 0 && byCat.length) add(b, el("p", "note", `合計 ${nt(te)}`));
       if (ui.chart === 2) add(b, el("p", "note", "近 6 個月支出"));
       if (byCat.length) add(b, el("p", "note", "👆 點任一分類 → 展開該類逐筆"));
       const max = byCat.length ? byCat[0][1] : 0;
@@ -462,12 +524,14 @@ function paint(d){
     }));
 
   // ── ✈️ 旅遊：跨月的行程總花費，與上方「本期」無關；收合時不載入（同 App v93） ──
-  root.appendChild(fold("trip", "✈️ 旅遊", tripState
-    ? `${tripState.trips.length} 趟行程` : "跨月的行程總花費（點開才載入）", paintTrips));
+  root.appendChild(tripFold());
 
-  // ── 本月預算 ──
+  // ── 本月預算（預算是全家、整月的；看單一成員或自訂區間時拿來比會誤導，改成說明） ──
   const budgeted = S.labels.filter(l => (l.budget || 0) > 0).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-  if (budgeted.length){
+  if (budgeted.length && (sel != null || p.type !== "month")){
+    root.appendChild(fold("budget", "本月預算", "切回「合併」並選整個月份時才比對預算", b =>
+      add(b, el("p", "note", "預算是全家整月的額度；只看單一成員或自訂區間時比對會失真，所以先不顯示。"))));
+  } else if (budgeted.length){
     const spentOf = k => (byCat.find(x => x[0] === k) || [, 0])[1];
     const overN = budgeted.filter(l => spentOf(l.key) > l.budget).length;
     root.appendChild(fold("budget", "本月預算",
@@ -527,6 +591,7 @@ function paint(d){
     root.appendChild(fold("subs", "🔁 定期扣款 / 訂閱",
       `${r.subs.length} 項 · 估每月約 ${nt(r.subs.reduce((a, s) => a + s.amount, 0))}`, b => {
         add(b, el("p", "note", "每月同金額、同日期固定扣款的商家（停車、超商等按次消費已排除）。不是訂閱就點「非訂閱」移除並記住。"));
+        if (S.subIgnoreErr) add(b, el("p", "warn", "⚠️ 讀不到已設定的「非訂閱」清單，先前移除的項目可能又出現；重新整理再試。"));
         for (const s of r.subs){
           const m = add(el("div", "m"), el("div", null, s.merchant),
             el("div", "muted", `連續 ${s.months} 個月同額同日 · 最近 ${s.lastDate}`));
@@ -548,7 +613,8 @@ function paint(d){
 }
 
 /* ═══════════ ✈️ 旅遊（Trips.kt）：行程＝日期區間＋單筆例外（trip_tx） ═══════════ */
-let tripState = null, tripLoading = false, tripErr = "";
+// tripDirty＝要重抓；重抓期間保留舊的 tripState（畫面與按鈕照常可用，標「更新中…」），新的到了再換
+let tripState = null, tripLoading = false, tripErr = "", tripDirty = false;
 
 /** 一次批次載入（同 App v78）：行程、例外、涵蓋所有行程的交易、區間外手動加入的、配對用存款流水。 */
 async function loadTrips(){
@@ -557,32 +623,48 @@ async function loadTrips(){
   for (const r of await Store.tripTx(trips.map(t => t.id)))
     overrides.get(r.trip_id)?.set(r.transaction_id, r.action);
   if (!trips.length) return { trips, overrides, txs: [], auto: new Map() };
-  const lo = trips.reduce((m, t) => (t.start_date < m ? t.start_date : m), trips[0].start_date);
-  const hi = trips.reduce((m, t) => (t.end_date > m ? t.end_date : m), trips[0].end_date);
-  const inRange = await Store.txAll(lo, addDays(hi, 1));
-  const have = new Set(inRange.map(t => t.id));
+  // 各趟行程分開抓（相隔一個月內的併成一段）：不要因為 2024 與 2026 各有一趟就把中間兩年全抓下來
+  const spans = [];
+  for (const t of trips.slice().sort((a, b) => (a.start_date < b.start_date ? -1 : 1))){
+    const last = spans[spans.length - 1];
+    if (last && addDays(last[1], 31) >= t.start_date){ if (t.end_date > last[1]) last[1] = t.end_date; }
+    else spans.push([t.start_date, t.end_date]);
+  }
+  const byId = new Map();
+  for (const [a, z] of spans) for (const t of await Store.txAll(a, addDays(z, 1))) byId.set(t.id, t);
   const includeIds = [...new Set([...overrides.values()].flatMap(m => [...m].filter(([, a]) => a === "include").map(([id]) => id)))]
-    .filter(id => !have.has(id));
-  const all = inRange.concat(await Store.txByIds(includeIds));
-  const dates = all.map(t => t.occurred_at).filter(Boolean).sort();
-  const wide = await Store.acct(addDays(dates[0] || lo, -5), addDays(dates[dates.length - 1] || hi, 6));
-  return { trips, overrides, txs: all, auto: E.autoExclusions(all, wide, S.accounts, S.members)[0] };
+    .filter(id => !byId.has(id));
+  const all = [...byId.values()].concat(await Store.txByIds(includeIds));
+  // 存款流水只抓每筆交易前後 5 天會碰到的段落（配對互轉/退款用）
+  const wide = new Map();
+  const dates = [...new Set(all.map(t => t.occurred_at).filter(Boolean))].sort();
+  const wspans = [];
+  for (const d of dates){
+    const last = wspans[wspans.length - 1];
+    if (last && addDays(last[1], 11) >= d) last[1] = d; else wspans.push([d, d]);
+  }
+  for (const [a, z] of wspans) for (const t of await Store.acct(addDays(a, -5), addDays(z, 6))) wide.set(t.id, t);
+  return { trips, overrides, txs: all, auto: E.autoExclusions(all, [...wide.values()], S.accounts, S.members)[0] };
 }
 function reloadTrips(){
-  tripState = null; tripErr = "";
-  if (openSec.get("trip")) ensureTrips(); else repaint();
+  tripErr = "";
+  if (openSec.get("trip")){ tripDirty = true; ensureTrips(); repaint(); }
+  else { tripState = null; repaint(); }
 }
 function ensureTrips(){
-  if (tripState || tripLoading) return;
-  tripLoading = true;
-  loadTrips().then(s => { tripState = s; }, e => { tripErr = "讀取行程失敗：" + (e.message || e); })
-             .finally(() => { tripLoading = false; repaint(); });
+  if (tripLoading || (tripState && !tripDirty)) return;
+  tripLoading = true; tripDirty = false;
+  loadTrips().then(s => { tripState = s; tripErr = ""; }, e => { tripErr = "讀取行程失敗：" + (e.message || e); })
+             .finally(() => { tripLoading = false; if (tripDirty) ensureTrips(); repaint(); });
 }
 
 function paintTrips(b){
   add(b, el("p", "note", "設定旅行的日期區間，期間內的消費會自動算成這趟旅行。分類與每月統計不受影響，只是多一個角度看「這趟花了多少」。"));
-  if (tripErr){ const r = el("button", null, "重試"); r.addEventListener("click", reloadTrips); add(b, el("p", "warn", tripErr), r); return; }
+  if (tripDirty) ensureTrips();
+  if (tripErr && !tripState){ const r = el("button", null, "重試"); r.addEventListener("click", reloadTrips); add(b, el("p", "warn", tripErr), r); return; }
   if (!tripState){ ensureTrips(); add(b, el("p", "muted", "讀取行程中…")); return; }
+  if (tripLoading) add(b, el("p", "muted", "🔄 更新中…"));
+  else if (tripErr) add(b, el("p", "warn", tripErr + "（下方是上一次的資料）"));
   const { trips, overrides, txs, auto } = tripState;
   if (!trips.length) add(b, el("p", "muted", "還沒有行程。按下方「新增行程」，填上名稱與起訖日就好。"));
   const L = k => E.labelOf(k, S.labels);
@@ -608,7 +690,7 @@ function paintTrips(b){
       add(box, sbar(L(c), amt, mx, s.total, { onClick: () => toggleBar(key) }),
         el("p", "note", `　${rows.length} 筆` + (exN ? `，${exN} 未計` : "") + (catOpen ? "" : "　點開看細項")));
       if (catOpen){
-        for (const t of rows.slice().sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1)))
+        for (const t of rows.slice().sort(newestFirst()))
           box.appendChild(txRow(t, exc(t), !E.covers(tp, t.occurred_at) ? "↳ 手動加入這趟（日期不在區間內）" : "",
                                 () => tripTxDialog(tp, t)));
         add(box, el("p", "note", "點單筆可以改分類，或把它移出這趟行程。"));
@@ -620,7 +702,7 @@ function paintTrips(b){
       k.addEventListener("click", () => toggleBar(kKey));
       box.appendChild(k);
       if (kOpen){
-        for (const t of s.kicked) box.appendChild(txRow(t, [true, "已移出這趟行程"], "", () => tripTxDialog(tp, t)));
+        for (const t of s.kicked.slice().sort(newestFirst())) box.appendChild(txRow(t, [true, "已移出這趟行程"], "", () => tripTxDialog(tp, t)));
         add(box, el("p", "note", "點一下可以加回這趟行程。這些筆仍照常算在當月支出裡，只是不算這趟旅行。"));
       }
     }
@@ -656,6 +738,7 @@ function dialog(title){
   const d = el("dialog", "dlg");
   const body = el("div", "dbody");
   const close = el("button", null, "關閉");
+  close.autofocus = true;   // 預設焦點不放輸入框：手機上一開對話框就跳鍵盤會遮掉一半
   add(d, el("h3", null, title), body, add(el("div", "dfoot"), close));
   close.addEventListener("click", () => d.close());
   d.addEventListener("close", () => d.remove());
@@ -674,6 +757,7 @@ async function guarded(fn, errEl){
 }
 
 function tripTxDialog(tp, t){
+  if (!tripState) return;
   const ov = tripState.overrides.get(tp.id) || new Map();
   const isIn = E.inTrip(t, tp, ov);
   const cur = E.classifyF(t, S.catRules, S.filterRules, S.cats);
@@ -693,13 +777,18 @@ function tripTxDialog(tp, t){
   add(body, mb, err, el("p", "note", "這只影響「這趟旅行花多少」。這筆仍照常算在當月支出與原分類裡；要完全不計收支，請到 App 的「明細」頁設「不納入收支」。"));
   if (t.merchant){
     const pick = el("select");
-    for (const [k, label] of E.categoryOptions(S.labels)){
+    const opts = E.categoryOptions(S.labels);
+    // 目前分類不在選單裡（例如手動建的分類）也要列出來，否則預設停在第一項，按套用會被悄悄改掉
+    if (!opts.some(([k]) => k === cur)) opts.unshift([cur, E.labelOf(cur, S.labels)]);
+    for (const [k, label] of opts){
       const o = el("option", null, label); o.value = k; if (k === cur) o.selected = true; pick.appendChild(o);
     }
     const apply = el("button", null, "套用");
+    pick.addEventListener("change", () => { apply.disabled = pick.value === cur; });
+    apply.disabled = true;
     apply.addEventListener("click", async () => {
       apply.disabled = true;
-      if (await guarded(() => Store.setCategoryRule(t.merchant, pick.value), err)){ d.close(); tripState = null; refreshData(); }
+      if (await guarded(() => Store.setCategoryRule(t.merchant, pick.value), err)){ d.close(); refreshData(); }
       else apply.disabled = false;
     });
     add(body, el("h4", null, "改分類"), add(el("div", "rowx"), pick, apply),
@@ -708,6 +797,7 @@ function tripTxDialog(tp, t){
 }
 
 function tripAddDialog(tp){
+  if (!tripState) return;
   const ov = tripState.overrides.get(tp.id) || new Map();
   const already = new Set(tripState.txs.filter(t => E.inTrip(t, tp, ov)).map(t => t.id));
   const addedIds = new Set();
@@ -717,11 +807,12 @@ function tripAddDialog(tp){
   add(body, el("p", "note", `只會列出不在行程區間（${tp.start_date} ~ ${tp.end_date}）內的消費——區間內的本來就已經算進去了。不搜尋＝列出行程前後 14 天的。`),
     q, info, err, list);
   d.addEventListener("close", () => { if (addedIds.size) reloadTrips(); });   // 加過就一定要刷新（含點外面關掉）
-  let nearby = null, found = null, timer = 0;
+  let nearby = null, found = null, failed = "", timer = 0, seq = 0;
   const draw = () => {
     const searching = q.value.trim().length >= 2;
     const src = searching ? found : nearby;
     list.replaceChildren();
+    if (failed){ list.appendChild(el("p", "warn", failed)); return; }
     if (!src){ list.appendChild(el("p", "muted", "讀取中…")); return; }
     const cands = E.tripAddCandidates(src, tp, new Set([...already, ...addedIds]))
       .filter(t => sel == null || E.txOwnerId(t, S.members) === sel);
@@ -740,10 +831,17 @@ function tripAddDialog(tp){
   q.addEventListener("input", () => {
     clearTimeout(timer);
     const s = q.value.trim();
+    const my = ++seq;   // 晚回來的舊搜尋不能蓋掉新的
+    failed = "";
     if (s.length < 2){ draw(); return; }
-    timer = setTimeout(async () => { found = null; draw(); found = await Store.search(s).catch(() => []); draw(); }, 350);
+    timer = setTimeout(async () => {
+      found = null; draw();
+      try { const r = await Store.search(s); if (my === seq){ found = r; draw(); } }
+      catch (e){ if (my === seq){ failed = "搜尋失敗：" + (e.message || e) + "（請確認網路後再打一次字）"; draw(); } }
+    }, 350);
   });
-  Store.txAll(addDays(tp.start_date, -14), addDays(tp.end_date, 15)).then(r => { nearby = r; draw(); }, () => { nearby = []; draw(); });
+  Store.txAll(addDays(tp.start_date, -14), addDays(tp.end_date, 15))
+    .then(r => { nearby = r; draw(); }, e => { nearby = []; failed = "讀取失敗：" + (e.message || e); draw(); });
   draw();
 }
 
@@ -773,13 +871,19 @@ function newTripDialog(){
 
 /* ═══════════ 資料存取（旅遊、分類、訂閱用）：live 走 Supabase（RLS），demo 改頁內陣列 ═══════════ */
 const must = ({ data, error }) => { if (error) throw error; return data; };
+/** id 清單每 100 個一批查（全塞進一個網址，累積幾百筆後會超過閘道的網址長度上限） */
+async function byIdChunks(ids, q){
+  const out = [];
+  for (let i = 0; i < ids.length; i += 100) out.push(...must(await q(ids.slice(i, i + 100))));
+  return out;
+}
 const LiveStore = {
   trips: () => sb.from("trips").select("*").eq("household_id", hid).order("start_date", { ascending: false }).then(must),
-  tripTx: ids => (ids.length ? sb.from("trip_tx").select("*").in("trip_id", ids).then(must) : Promise.resolve([])),
+  tripTx: ids => byIdChunks(ids, c => sb.from("trip_tx").select("*").in("trip_id", c)),
   txAll: (a, b) => pagedFetch(() => sb.from("transactions").select("*").eq("household_id", hid).neq("dedup_status", "merged")
       .gte("occurred_at", a).lt("occurred_at", b).order("occurred_at", { ascending: false }))
     .then(rows => rows.filter(t => t.occurred_at >= a && t.occurred_at < b)),
-  txByIds: ids => (ids.length ? sb.from("transactions").select("*").in("id", ids).then(must) : Promise.resolve([])),
+  txByIds: ids => byIdChunks(ids, c => sb.from("transactions").select("*").in("id", c)),
   acct: (a, b) => (S.accounts.length ? pagedFetch(() => sb.from("account_transactions").select("*")
       .in("account_id", S.accounts.map(x => x.id)).gte("occurred_at", a).lt("occurred_at", b)
       .order("occurred_at", { ascending: false })) : Promise.resolve([])),
@@ -789,11 +893,14 @@ const LiveStore = {
       .or(`merchant.ilike.*${s}*,note.ilike.*${s}*`).order("occurred_at", { ascending: false }).limit(300).then(must);
   },
   addTrip: (name, s, e) => sb.from("trips").insert({ household_id: hid, name, start_date: s, end_date: e, note: "" }).then(must),
-  deleteTrip: id => sb.from("trips").delete().eq("id", id).then(must),
-  async setTripTx(tripId, txId, action){   // 同 App：先刪再寫，一筆一趟只留一列
-    must(await sb.from("trip_tx").delete().eq("trip_id", tripId).eq("transaction_id", txId));
-    must(await sb.from("trip_tx").insert({ trip_id: tripId, transaction_id: txId, action }));
+  // 被權限擋掉的刪除不會報錯、只是刪了 0 列 → 要回傳刪掉的列來確認，否則畫面說成功其實沒刪
+  deleteTrip: async id => {
+    if (!must(await sb.from("trips").delete().eq("id", id).select("id")).length) throw new Error("沒有刪到（可能已被刪除或沒有權限）");
   },
+  // 一筆一趟只留一列（表上有 unique(trip_id, transaction_id)）：用 upsert 一次寫完，
+  // 不像先刪再寫那樣「刪成功、寫失敗」就把原本的設定弄丟
+  setTripTx: (tripId, txId, action) => sb.from("trip_tx")
+    .upsert({ trip_id: tripId, transaction_id: txId, action }, { onConflict: "trip_id,transaction_id" }).then(must),
   clearTripTx: (tripId, txId) => sb.from("trip_tx").delete().eq("trip_id", tripId).eq("transaction_id", txId).then(must),
   setCategoryRule: (merchant, category) => sb.rpc("set_category_rule", { hid, p_merchant: merchant, p_category: category }).then(must)
 };
@@ -823,15 +930,18 @@ function drawChart(cv, byCat, trend6){
   const ink = css("--ink"), sub = css("--sub"), L = k => E.labelOf(k, S.labels);
   const nf = v => nt(v);
   if (ui.chart === 0){
+    // 圖例帶百分比（同 App 圓餅：四捨五入；長條那邊是截斷，與 App 各自一致）
+    const tot = byCat.reduce((a, c) => a + c[1], 0);
     charts.push(new Chart(cv, { type: "doughnut",
-      data: { labels: byCat.map(c => L(c[0])), datasets: [{ data: byCat.map(c => c[1]), backgroundColor: PIE_COLORS, borderWidth: 0 }] },
+      data: { labels: byCat.map(c => `${L(c[0])} ${tot > 0 ? Math.round(c[1] * 100 / tot) : 0}%`),
+              datasets: [{ data: byCat.map(c => c[1]), backgroundColor: byCat.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]), borderWidth: 0 }] },
       options: { plugins: { legend: { position: "bottom", labels: { color: ink, boxWidth: 12 } },
                             tooltip: { callbacks: { label: c => `${c.label} ${nf(c.raw)}` } } } } }));
   } else {
     const data = ui.chart === 1 ? byCat.map(c => [L(c[0]), c[1]]) : trend6;
     charts.push(new Chart(cv, { type: "bar",
       data: { labels: data.map(x => x[0]), datasets: [{ data: data.map(x => x[1]), backgroundColor: "#0abde3", borderRadius: 4 }] },
-      options: { indexAxis: ui.chart === 1 ? "y" : "x", plugins: { legend: { display: false },
+      options: { indexAxis: ui.chart === 1 ? "y" : "x", maintainAspectRatio: ui.chart !== 1, plugins: { legend: { display: false },
                    tooltip: { callbacks: { label: c => nf(c.raw) } } },
                  scales: { x: { ticks: { color: sub } }, y: { ticks: { color: sub } } } } }));
   }
@@ -839,36 +949,51 @@ function drawChart(cv, byCat, trend6){
 
 async function ignoreSub(merchant){
   const p = merchant.trim().toLowerCase();
+  const before = S.subIgnores;
   S.subIgnores = new Set([...S.subIgnores, p]);   // 當場生效
   repaint();
   if (!DEMO){
     const { error } = await sb.rpc("set_subscription_ignore", { hid, p_pattern: merchant.trim() });
-    if (error) $("syncMsg").textContent = "⚠️「非訂閱」沒存到雲端，下次打開可能又會出現";
+    if (error){   // 沒存到就放回來，並在原地說清楚（頁首的訊息在畫面下方看不到）
+      S.subIgnores = before; repaint();
+      alert(`「${merchant.trim()}」沒存到雲端：${error.message}\n請確認網路後再按一次「非訂閱」。`);
+    }
   }
 }
 
 /* ═══════════ 期間切換 ═══════════ */
-function setPeriod(p){ period = p; ui.cardSrc = null; ui.bars.clear(); $("picker").hidden = true; render(); }
+function setPeriod(p){
+  period = p; ui.cardSrc = null;
+  for (const k of [...ui.bars]) if (!k.startsWith("trip:")) ui.bars.delete(k);   // 旅遊跟期間無關，展開狀態保留
+  $("picker").hidden = true; $("btnPeriod").setAttribute("aria-expanded", "false");
+  render();
+}
 function bindNav(){
   $("btnPrev").addEventListener("click", () => setPeriod(E.Period.prev(period)));
   $("btnNext").addEventListener("click", () => { if (E.Period.canNext(period)) setPeriod(E.Period.next(period)); });
   $("btnPeriod").addEventListener("click", () => {
     const pk = $("picker"); pk.hidden = !pk.hidden;
     $("btnPeriod").setAttribute("aria-expanded", String(!pk.hidden));
-    const st = E.Period.startDate(period);
-    $("pickMonth").value = st.slice(0, 7);
-    $("pickStart").value = st;
-    $("pickEnd").value = addDays(E.Period.endExclusive(period), -1);
+    const st = E.Period.startDate(period), today = E.todayIso();
+    $("pickMonth").value = st.slice(0, 7); $("pickMonth").max = today.slice(0, 7);
+    $("pickStart").value = st; $("pickStart").max = today;
+    $("pickEnd").value = addDays(E.Period.endExclusive(period), -1); $("pickEnd").max = today;
+    $("pickErr").textContent = "";
   });
   $("btnPickMonth").addEventListener("click", () => {
     const v = $("pickMonth").value;
-    if (/^\d{4}-\d{2}$/.test(v)) setPeriod(E.Period.month(+v.slice(0, 4), +v.slice(5, 7)));
+    if (!/^\d{4}-\d{2}$/.test(v)) $("pickErr").textContent = "請先選一個月份";
+    else if (v > E.todayIso().slice(0, 7)) $("pickErr").textContent = "還沒到這個月份";
+    else setPeriod(E.Period.month(+v.slice(0, 4), +v.slice(5, 7)));
   });
   $("btnPickRange").addEventListener("click", () => {
     const a = $("pickStart").value, b = $("pickEnd").value;
-    if (a && b && a <= b) setPeriod(E.Period.range(a, b));
+    if (!a || !b) $("pickErr").textContent = "起、迄日期都要選";
+    else if (a > b) $("pickErr").textContent = "起日不能晚於迄日";
+    else setPeriod(E.Period.range(a, b));
   });
   $("btnRetry").addEventListener("click", () => location.reload());
+  $("btnRecheck").addEventListener("click", () => location.reload());
   if (window.matchMedia)
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaint);
 }
@@ -878,7 +1003,7 @@ function thisMonth(){ const d = new Date(); return E.Period.month(d.getFullYear(
 // 資料有變才重抓：比對「最新一筆交易的建立時間＋雲端最後撈取／同步完成時間」。
 // 畫面開著每分鐘看一次；從背景切回來時直接整份重抓（App 上改分類這種不會動到上述時間的也一併跟上）。
 const LIVE_EVERY = 60_000;
-let liveMark = null, refreshing = false;
+let liveMark = null, refreshing = false, rerun = false, lastFull = 0;
 
 async function dataMark(){
   const one = q => q.limit(1).then(({ data, error }) => { if (error) throw error; return data && data[0]; });
@@ -890,25 +1015,37 @@ async function dataMark(){
   ]);
   return [t?.created_at, s?.last_run_at, r?.finished_at].join("|");
 }
-async function refreshData(){
-  if (refreshing || $("app").hidden) return;
+let inflight = null;
+function refreshData(){
+  if ($("app").hidden) return Promise.resolve();
+  // 正在重抓時又有人要求（同步完成、剛改分類）→ 記下來，這輪跑完再跑一次；直接丟掉的話畫面會停在改之前。
+  // 回傳進行中的那一輪（含加跑），呼叫端 await 到的就是「畫面真的更新完」
+  if (refreshing){ rerun = true; return inflight; }
+  return (inflight = doRefresh());
+}
+async function doRefresh(){
   refreshing = true;
   try {
-    tripState = null; tripErr = "";   // 行程跟著重抓（開著的話 paint 會觸發載入）
-    if (!DEMO){ await loadStatic(); periodCache.clear(); }
-    buildChips();
-    await render(true);
-    if (!DEMO) liveMark = await dataMark();
-  } catch (e){ console.warn("背景更新失敗，下次再試", e); }
+    do {
+      rerun = false;
+      // 先取標記再抓資料：抓的途中有新資料進來，標記就會不同，下一分鐘自然再抓一次（反過來會把沒抓到的標成看過）
+      const mark = DEMO ? null : await dataMark();
+      tripDirty = true;                 // 行程跟著重抓（開著才會真的載入；重抓中保留舊畫面）
+      if (!DEMO){ await loadStatic(); periodCache.clear(); cacheGen++; }
+      buildChips();
+      await render(true);
+      liveMark = mark; lastFull = Date.now();
+    } while (rerun);
+  } catch (e){ netFail(e); }
   finally { refreshing = false; }
 }
 async function checkLive(){
-  if (document.hidden || refreshing) return;
+  if (document.hidden || refreshing || !hid) return;
   try {
     const mark = await dataMark();
     if (liveMark !== null && mark !== liveMark) await refreshData();
-    else liveMark = mark;
-  } catch (e){ console.warn("檢查更新失敗", e); }
+    else { liveMark = mark; if (!$("netMsg").hidden && lastData) render(true); }   // 剛恢復連線：順手補抓
+  } catch (e){ netFail(e); }
 }
 // 頁面本身有新版（伺服器上的 index.html 換了）→ 切回來時自動重新載入，等於 App 自動更新
 let pageTag = null;
@@ -917,8 +1054,9 @@ async function pageVersion(){
   return res.headers.get("etag") || res.headers.get("last-modified");
 }
 function startLiveUpdates(){
-  liveMark = null;
+  liveMark = null; lastFull = Date.now();
   checkLive();
+  window.addEventListener("online", () => refreshData());
   setInterval(checkLive, LIVE_EVERY);
   pageVersion().then(v => { pageTag = v; }).catch(() => {});
   document.addEventListener("visibilitychange", async () => {
@@ -927,7 +1065,8 @@ function startLiveUpdates(){
       const v = await pageVersion();
       if (pageTag && v && v !== pageTag && !syncing){ location.reload(); return; }
     } catch (_){ /* 離線：照用目前這版 */ }
-    refreshData();
+    // 切出去回個訊息馬上回來，不必整份重抓（20 多個請求）；30 秒內只比對標記，有變才抓
+    if (Date.now() - lastFull < 30_000) checkLive(); else refreshData();
   });
 }
 
@@ -946,7 +1085,7 @@ async function showLastSync(prefix = ""){
     .eq("household_id", hid).eq("status", "done").order("finished_at", { ascending: false }).limit(1);
   const last = [s?.last_run_at, done?.[0]?.finished_at].filter(Boolean).sort().pop();
   $("syncMsg").textContent = prefix + (last ? `上次同步 ${hhmm(last)}` : "") +
-                             (s?.last_error ? "　⚠️ 上次撈取有錯誤，請到 App 的同步頁查看" : "");
+    (s?.last_error ? `　⚠️ 上次撈取有錯誤：${(String(s.last_error).split("\n").filter(Boolean).pop() || "").slice(0, 80)}` : "");
 }
 async function watchSync(id){
   syncing = true;
@@ -966,12 +1105,22 @@ async function watchSync(id){
 async function startSync(){
   if (syncing) return;
   $("syncMsg").textContent = "同步中…已送出，雲端撈取中（約 1～3 分鐘）";
+  // 卡住超過 20 分鐘的 pending 先結案：雲端那輪若沒跑完（token 失效、被取代、逾時）沒人會來標，
+  // 而「同家庭只許一筆 pending」會擋掉之後每一次同步（資料庫端 v94 也做同一件事，雙保險）
+  await sb.from("sync_requests").update({ status: "failed", finished_at: new Date().toISOString() })
+    .eq("household_id", hid).eq("status", "pending")
+    .lt("requested_at", new Date(Date.now() - 20 * 60_000).toISOString());
   const { data, error } = await sb.from("sync_requests").insert({ household_id: hid }).select("id").single();
   if (error || !data){
     const m = (error && error.message) || "";
-    $("syncMsg").textContent = m.includes("過於頻繁") ? "⏳ 剛剛才同步過，請等約一分鐘再按"
-      : (m.includes("uniq_sync_pending") || m.includes("duplicate key")) ? "⏳ 已有一次同步在進行中，完成後畫面會自己更新"
-      : "❌ 送出失敗，請確認網路後再試";
+    if (m.includes("uniq_sync_pending") || m.includes("duplicate key")){
+      // 別台裝置（或 App）的同步還在跑：接著等它，完成時一樣自動更新
+      const { data: p } = await sb.from("sync_requests").select("id").eq("household_id", hid).eq("status", "pending").limit(1);
+      $("syncMsg").textContent = "⏳ 已有一次同步在進行中，完成後畫面會自己更新";
+      if (p && p.length) watchSync(p[0].id);
+      return;
+    }
+    $("syncMsg").textContent = m.includes("過於頻繁") ? "⏳ 剛剛才同步過，請等約一分鐘再按" : "❌ 送出失敗，請確認網路後再試";
     return;
   }
   watchSync(data.id);
@@ -1037,7 +1186,8 @@ async function afterLogin(session){
     $("who").textContent = "登入：" + (session.user.email || "");
     $("btnSignOut").hidden = false;
     showStatus("確認家庭成員資格中…");
-    const { data: hm, error } = await sb.from("household_members").select("household_id").limit(1);
+    const { data: hm, error } = await sb.from("household_members").select("household_id")
+      .eq("user_id", session.user.id).order("joined_at").limit(1);
     if (error) throw error;
     if (!hm || !hm.length){ showView("nomember"); return; }
     hid = hm[0].household_id;
@@ -1063,8 +1213,19 @@ function startLive(){
   const doSignOut = async () => { await sb.auth.signOut(); location.reload(); };
   $("btnSignOut").addEventListener("click", doSignOut);
   $("btnSignOut2").addEventListener("click", doSignOut);
+  // 登入失敗（例如帳號不在 Google 測試名單）會帶著 error_description 回跳：講出來，不然看起來像按鈕壞了
+  const back = new URLSearchParams(location.search + "&" + location.hash.replace(/^#/, ""));
+  if (back.get("error_description") || back.get("error")){
+    $("loginErr").textContent = "登入沒有成功：" + (back.get("error_description") || back.get("error")) +
+                                "。若是第一次用，請確認這個 Google 帳號已被加進允許名單。";
+    history.replaceState(null, "", location.pathname);
+  }
   let started = false;
-  sb.auth.onAuthStateChange((_ev, session) => { if (session && !started){ started = true; afterLogin(session); } });
+  sb.auth.onAuthStateChange((ev, session) => {
+    // 登入過期或在別處登出：回登入頁。不處理的話之後的查詢都變成未登入，畫面會變成「沒有資料」誤導人
+    if (ev === "SIGNED_OUT"){ hid = null; showView("login"); return; }
+    if (session && !started){ started = true; afterLogin(session); }
+  });
   sb.auth.getSession().then(({ data: { session } }) => {
     if (session){ if (!started){ started = true; afterLogin(session); } }
     else if (!started) showView("login");
