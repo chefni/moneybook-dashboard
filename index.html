@@ -51,6 +51,7 @@
   h1 { font-size:21px; }
   select,button,input { font:inherit; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
   button { cursor:pointer; }
+  button:disabled { opacity:.45; cursor:default; }
   button.primary { background:var(--accent); color:#fff; border:none; }
   button.link { border:none; background:none; color:var(--accent); padding:4px 6px; font-size:13px; }
   .spacer { flex:1; }
@@ -120,6 +121,27 @@
   .exrow .n { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .exrow .r { border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:11px; }
   .exrow .a { text-decoration:line-through; }
+  /* ✈️ 旅遊 */
+  .trip { border-bottom:1px solid var(--line); padding:6px 0 8px; }
+  .trip > button:not(.triphead):not(.link) { margin:6px 0 2px; }
+  .triphead, .txrow { display:flex; width:100%; align-items:center; gap:10px; text-align:left; border:none; border-radius:8px; background:none; padding:8px 2px; }
+  .triphead .m, .txrow .m { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .triphead small, .txrow small { color:var(--sub); font-size:12px; }
+  .txrow { padding:6px 4px; font-size:13px; border-bottom:1px dashed var(--line); border-radius:0; }
+  .txrow .m > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .txrow.off { color:var(--sub); }
+  .txrow.off .a { text-decoration:line-through; }
+  .txrow small.hint { color:var(--accent); }
+  .link.danger { color:var(--red); }
+  .dlg { margin:auto; border:none; border-radius:14px; padding:0;   /* margin:auto＝置中（* 的 margin:0 會蓋掉瀏覽器預設） */ width:min(520px, calc(100vw - 24px)); max-height:85vh;
+         background:var(--card); color:var(--ink); box-shadow:0 8px 30px rgba(0,0,0,.3); }
+  .dlg::backdrop { background:rgba(0,0,0,.4); }
+  .dlg h3 { padding:16px 16px 6px; font-size:17px; }
+  .dlg h4 { margin:14px 0 4px; font-size:14px; }
+  .dbody { padding:0 16px; overflow-y:auto; max-height:calc(85vh - 110px); display:flex; flex-direction:column; gap:6px; }
+  .dbody input:not([type=date]) { width:100%; }
+  .dfoot { padding:10px 16px 14px; text-align:right; }
+  .rowx { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   footer { margin:18px 0 8px; color:var(--sub); font-size:12px; }
   @media (max-width:420px) {
     body { padding:12px; }
@@ -439,9 +461,9 @@ function paint(d){
       }
     }));
 
-  // ── ✈️ 旅遊（下一版搬） ──
-  root.appendChild(fold("trip", "✈️ 旅遊", "跨月的行程總花費（下一版搬過來，暫時請在 App 看）",
-    b => add(b, el("p", "note", "行程的建立、移出／加回、改分類會在下一版一起搬過來。"))));
+  // ── ✈️ 旅遊：跨月的行程總花費，與上方「本期」無關；收合時不載入（同 App v93） ──
+  root.appendChild(fold("trip", "✈️ 旅遊", tripState
+    ? `${tripState.trips.length} 趟行程` : "跨月的行程總花費（點開才載入）", paintTrips));
 
   // ── 本月預算 ──
   const budgeted = S.labels.filter(l => (l.budget || 0) > 0).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -525,6 +547,275 @@ function paint(d){
   }
 }
 
+/* ═══════════ ✈️ 旅遊（Trips.kt）：行程＝日期區間＋單筆例外（trip_tx） ═══════════ */
+let tripState = null, tripLoading = false, tripErr = "";
+
+/** 一次批次載入（同 App v78）：行程、例外、涵蓋所有行程的交易、區間外手動加入的、配對用存款流水。 */
+async function loadTrips(){
+  const trips = await Store.trips();
+  const overrides = new Map(trips.map(t => [t.id, new Map()]));
+  for (const r of await Store.tripTx(trips.map(t => t.id)))
+    overrides.get(r.trip_id)?.set(r.transaction_id, r.action);
+  if (!trips.length) return { trips, overrides, txs: [], auto: new Map() };
+  const lo = trips.reduce((m, t) => (t.start_date < m ? t.start_date : m), trips[0].start_date);
+  const hi = trips.reduce((m, t) => (t.end_date > m ? t.end_date : m), trips[0].end_date);
+  const inRange = await Store.txAll(lo, addDays(hi, 1));
+  const have = new Set(inRange.map(t => t.id));
+  const includeIds = [...new Set([...overrides.values()].flatMap(m => [...m].filter(([, a]) => a === "include").map(([id]) => id)))]
+    .filter(id => !have.has(id));
+  const all = inRange.concat(await Store.txByIds(includeIds));
+  const dates = all.map(t => t.occurred_at).filter(Boolean).sort();
+  const wide = await Store.acct(addDays(dates[0] || lo, -5), addDays(dates[dates.length - 1] || hi, 6));
+  return { trips, overrides, txs: all, auto: E.autoExclusions(all, wide, S.accounts, S.members)[0] };
+}
+function reloadTrips(){
+  tripState = null; tripErr = "";
+  if (openSec.get("trip")) ensureTrips(); else repaint();
+}
+function ensureTrips(){
+  if (tripState || tripLoading) return;
+  tripLoading = true;
+  loadTrips().then(s => { tripState = s; }, e => { tripErr = "讀取行程失敗：" + (e.message || e); })
+             .finally(() => { tripLoading = false; repaint(); });
+}
+
+function paintTrips(b){
+  add(b, el("p", "note", "設定旅行的日期區間，期間內的消費會自動算成這趟旅行。分類與每月統計不受影響，只是多一個角度看「這趟花了多少」。"));
+  if (tripErr){ const r = el("button", null, "重試"); r.addEventListener("click", reloadTrips); add(b, el("p", "warn", tripErr), r); return; }
+  if (!tripState){ ensureTrips(); add(b, el("p", "muted", "讀取行程中…")); return; }
+  const { trips, overrides, txs, auto } = tripState;
+  if (!trips.length) add(b, el("p", "muted", "還沒有行程。按下方「新增行程」，填上名稱與起訖日就好。"));
+  const L = k => E.labelOf(k, S.labels);
+  const exc = t => E.effExcludeF(t, auto, S.excludeRules, S.filterRules);
+  const catOf = t => E.classifyF(t, S.catRules, S.filterRules, S.cats);
+  const mine = sel == null ? txs : txs.filter(t => E.txOwnerId(t, S.members) === sel);
+  for (const tp of trips){
+    const ov = overrides.get(tp.id) || new Map();
+    const s = E.tripSummary(tp, mine, ov, exc, catOf);
+    const open = ui.bars.has("trip:" + tp.id);
+    const head = el("button", "triphead");
+    add(head, add(el("span", "m"), el("b", null, (open ? "▾ " : "▸ ") + tp.name),
+                  el("small", null, `${tp.start_date} ~ ${tp.end_date}　${s.counted.length} 筆`)), el("b", null, nt(s.total)));
+    head.addEventListener("click", () => toggleBar("trip:" + tp.id));
+    const box = add(el("div", "trip"), head);
+    b.appendChild(box);
+    if (!open) continue;
+    if (!s.rows.length) add(box, el("p", "note", "這段期間沒有支出紀錄。"));
+    const mx = s.byCat.length ? s.byCat[0][2] : 0;
+    for (const [c, rows, amt] of s.byCat){
+      const key = `trip:${tp.id}/${c}`, catOpen = ui.bars.has(key);
+      const exN = rows.filter(t => exc(t)[0]).length;
+      add(box, sbar(L(c), amt, mx, s.total, { onClick: () => toggleBar(key) }),
+        el("p", "note", `　${rows.length} 筆` + (exN ? `，${exN} 未計` : "") + (catOpen ? "" : "　點開看細項")));
+      if (catOpen){
+        for (const t of rows.slice().sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1)))
+          box.appendChild(txRow(t, exc(t), !E.covers(tp, t.occurred_at) ? "↳ 手動加入這趟（日期不在區間內）" : "",
+                                () => tripTxDialog(tp, t)));
+        add(box, el("p", "note", "點單筆可以改分類，或把它移出這趟行程。"));
+      }
+    }
+    if (s.kicked.length){
+      const kKey = `trip:${tp.id}/__kicked`, kOpen = ui.bars.has(kKey);
+      const k = el("button", "link", `${kOpen ? "▾" : "▸"} 已移出這趟（${s.kicked.length} 筆）`);
+      k.addEventListener("click", () => toggleBar(kKey));
+      box.appendChild(k);
+      if (kOpen){
+        for (const t of s.kicked) box.appendChild(txRow(t, [true, "已移出這趟行程"], "", () => tripTxDialog(tp, t)));
+        add(box, el("p", "note", "點一下可以加回這趟行程。這些筆仍照常算在當月支出裡，只是不算這趟旅行。"));
+      }
+    }
+    add(box, el("p", "note", `共 ${s.days} 天，平均每天 ${nt(Math.trunc(s.total / Math.max(1, s.days)))}` +
+                              (s.manualN ? `　（${s.manualN} 筆手動調整過）` : "")));
+    const addBtn = el("button", null, "➕ 把其他消費加進這趟");
+    addBtn.addEventListener("click", () => tripAddDialog(tp));
+    const del = el("button", "link danger", "刪除這趟行程");
+    del.addEventListener("click", async () => {
+      if (!confirm(`要刪除「${tp.name}」嗎？\n只會刪掉行程設定，交易紀錄不會被刪。`)) return;
+      await guarded(() => Store.deleteTrip(tp.id));
+      reloadTrips();
+    });
+    add(box, addBtn, el("p", "note", "出發前訂的機票飯店、回國後才入帳的刷卡，都可以從這裡加進來。"), del);
+  }
+  const nb = el("button", null, "➕ 新增行程");
+  nb.addEventListener("click", newTripDialog);
+  add(b, nb);
+}
+
+/** 單筆一列：未計入的灰字刪除線＋原因（同明細頁 ExpenseTxRow 的呈現） */
+function txRow(t, [ex, why], hint, onClick){
+  const r = el("button", "txrow" + (ex ? " off" : ""));
+  add(r, add(el("span", "m"), el("span", null, `${t.occurred_at.slice(5)}  ${t.merchant || t.note || "（無備註）"}`),
+             ex && why ? el("small", null, why) : null, hint ? el("small", "hint", hint) : null),
+      el("span", "a", nt(t.amount)));
+  r.addEventListener("click", onClick);
+  return r;
+}
+
+/* ── 對話框（原生 <dialog>） ── */
+function dialog(title){
+  const d = el("dialog", "dlg");
+  const body = el("div", "dbody");
+  const close = el("button", null, "關閉");
+  add(d, el("h3", null, title), body, add(el("div", "dfoot"), close));
+  close.addEventListener("click", () => d.close());
+  d.addEventListener("close", () => d.remove());
+  document.body.appendChild(d);
+  d.showModal();
+  return { d, body, close };
+}
+/** 寫入失敗一定要講出來（App v74 的教訓：按了、關了、什麼都沒變，使用者完全不知道） */
+async function guarded(fn, errEl){
+  try { await fn(); return true; }
+  catch (e){
+    const msg = "存檔失敗：" + (e && e.message ? e.message : e);
+    if (errEl) errEl.textContent = msg; else alert(msg);
+    return false;
+  }
+}
+
+function tripTxDialog(tp, t){
+  const ov = tripState.overrides.get(tp.id) || new Map();
+  const isIn = E.inTrip(t, tp, ov);
+  const cur = E.classifyF(t, S.catRules, S.filterRules, S.cats);
+  const { d, body } = dialog("這筆消費");
+  const err = el("p", "warn");
+  add(body, el("b", null, t.merchant || t.note || "（無備註）"),
+    el("p", "muted", `${t.occurred_at} · ${nt(t.amount)} · 目前分類：${E.labelOf(cur, S.labels)}`),
+    el("h4", null, "✈️ 行程歸屬"), el("p", "muted", `「${tp.name}」　目前：${E.tripMemberState(t, tp, ov)}`));
+  const mb = el("button", isIn ? null : "primary", isIn ? "➖ 移出這趟行程" : "➕ 加回這趟行程");
+  mb.addEventListener("click", async () => {
+    mb.disabled = true;
+    const a = E.tripTxAction(tp, t.occurred_at, !isIn);
+    if (await guarded(() => (a == null ? Store.clearTripTx(tp.id, t.id) : Store.setTripTx(tp.id, t.id, a)), err)){
+      d.close(); reloadTrips();
+    } else mb.disabled = false;
+  });
+  add(body, mb, err, el("p", "note", "這只影響「這趟旅行花多少」。這筆仍照常算在當月支出與原分類裡；要完全不計收支，請到 App 的「明細」頁設「不納入收支」。"));
+  if (t.merchant){
+    const pick = el("select");
+    for (const [k, label] of E.categoryOptions(S.labels)){
+      const o = el("option", null, label); o.value = k; if (k === cur) o.selected = true; pick.appendChild(o);
+    }
+    const apply = el("button", null, "套用");
+    apply.addEventListener("click", async () => {
+      apply.disabled = true;
+      if (await guarded(() => Store.setCategoryRule(t.merchant, pick.value), err)){ d.close(); tripState = null; refreshData(); }
+      else apply.disabled = false;
+    });
+    add(body, el("h4", null, "改分類"), add(el("div", "rowx"), pick, apply),
+      el("p", "note", "同商家的每一筆都會跟著改（全站一起變）。"));
+  }
+}
+
+function tripAddDialog(tp){
+  const ov = tripState.overrides.get(tp.id) || new Map();
+  const already = new Set(tripState.txs.filter(t => E.inTrip(t, tp, ov)).map(t => t.id));
+  const addedIds = new Set();
+  const { d, body } = dialog(`加進「${tp.name}」`);
+  const q = el("input"); q.placeholder = "🔍 搜尋商家或備註";
+  const info = el("p", "muted"), err = el("p", "warn"), list = el("div");
+  add(body, el("p", "note", `只會列出不在行程區間（${tp.start_date} ~ ${tp.end_date}）內的消費——區間內的本來就已經算進去了。不搜尋＝列出行程前後 14 天的。`),
+    q, info, err, list);
+  d.addEventListener("close", () => { if (addedIds.size) reloadTrips(); });   // 加過就一定要刷新（含點外面關掉）
+  let nearby = null, found = null, timer = 0;
+  const draw = () => {
+    const searching = q.value.trim().length >= 2;
+    const src = searching ? found : nearby;
+    list.replaceChildren();
+    if (!src){ list.appendChild(el("p", "muted", "讀取中…")); return; }
+    const cands = E.tripAddCandidates(src, tp, new Set([...already, ...addedIds]))
+      .filter(t => sel == null || E.txOwnerId(t, S.members) === sel);
+    if (!cands.length) list.appendChild(el("p", "muted", searching ? "找不到符合的消費。" : "行程前後 14 天沒有其他消費。用上面的搜尋找更早或更晚的。"));
+    for (const t of cands.slice(0, 60)){
+      const r = txRow(t, [false, ""], E.labelOf(E.classifyF(t, S.catRules, S.filterRules, S.cats), S.labels), async () => {
+        r.disabled = true; err.textContent = "";
+        if (await guarded(() => Store.setTripTx(tp.id, t.id, "include"), err)){
+          addedIds.add(t.id); info.textContent = `已加入 ${addedIds.size} 筆`; draw();
+        } else r.disabled = false;
+      });
+      list.appendChild(r);
+    }
+    if (cands.length > 60) list.appendChild(el("p", "note", "只顯示前 60 筆，請用搜尋縮小範圍。"));
+  };
+  q.addEventListener("input", () => {
+    clearTimeout(timer);
+    const s = q.value.trim();
+    if (s.length < 2){ draw(); return; }
+    timer = setTimeout(async () => { found = null; draw(); found = await Store.search(s).catch(() => []); draw(); }, 350);
+  });
+  Store.txAll(addDays(tp.start_date, -14), addDays(tp.end_date, 15)).then(r => { nearby = r; draw(); }, () => { nearby = []; draw(); });
+  draw();
+}
+
+function newTripDialog(){
+  const today = E.todayIso();
+  const { d, body } = dialog("新增行程");
+  const name = el("input"); name.placeholder = "行程名稱（如：日本東京）";
+  const s = el("input"), e = el("input");
+  s.type = e.type = "date"; s.value = e.value = today;
+  const days = el("p", "muted"), err = el("p", "warn");
+  const save = el("button", "primary", "儲存");
+  const check = () => {
+    if (e.value < s.value) e.value = s.value;
+    days.textContent = `共 ${E.dayCount(s.value, e.value)} 天`;
+    save.disabled = !name.value.trim() || !s.value || !e.value;
+  };
+  for (const x of [name, s, e]) x.addEventListener("input", check);
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    if (await guarded(() => Store.addTrip(name.value.trim(), s.value, e.value), err)){ d.close(); reloadTrips(); }
+    else save.disabled = false;
+  });
+  add(body, name, add(el("div", "rowx"), el("span", null, "出發"), s), add(el("div", "rowx"), el("span", null, "回程"), e),
+    days, el("p", "note", "這段期間內的消費都會算進這趟行程。若有非旅遊的固定扣款混進來，可以點那筆「移出這趟行程」。"), err, save);
+  check();
+}
+
+/* ═══════════ 資料存取（旅遊、分類、訂閱用）：live 走 Supabase（RLS），demo 改頁內陣列 ═══════════ */
+const must = ({ data, error }) => { if (error) throw error; return data; };
+const LiveStore = {
+  trips: () => sb.from("trips").select("*").eq("household_id", hid).order("start_date", { ascending: false }).then(must),
+  tripTx: ids => (ids.length ? sb.from("trip_tx").select("*").in("trip_id", ids).then(must) : Promise.resolve([])),
+  txAll: (a, b) => pagedFetch(() => sb.from("transactions").select("*").eq("household_id", hid).neq("dedup_status", "merged")
+      .gte("occurred_at", a).lt("occurred_at", b).order("occurred_at", { ascending: false }))
+    .then(rows => rows.filter(t => t.occurred_at >= a && t.occurred_at < b)),
+  txByIds: ids => (ids.length ? sb.from("transactions").select("*").in("id", ids).then(must) : Promise.resolve([])),
+  acct: (a, b) => (S.accounts.length ? pagedFetch(() => sb.from("account_transactions").select("*")
+      .in("account_id", S.accounts.map(x => x.id)).gte("occurred_at", a).lt("occurred_at", b)
+      .order("occurred_at", { ascending: false })) : Promise.resolve([])),
+  search(q){
+    const s = q.replace(/[,()*%"\\]/g, "");   // PostgREST or() 的語法字元一律拿掉
+    return sb.from("transactions").select("*").eq("household_id", hid).neq("dedup_status", "merged")
+      .or(`merchant.ilike.*${s}*,note.ilike.*${s}*`).order("occurred_at", { ascending: false }).limit(300).then(must);
+  },
+  addTrip: (name, s, e) => sb.from("trips").insert({ household_id: hid, name, start_date: s, end_date: e, note: "" }).then(must),
+  deleteTrip: id => sb.from("trips").delete().eq("id", id).then(must),
+  async setTripTx(tripId, txId, action){   // 同 App：先刪再寫，一筆一趟只留一列
+    must(await sb.from("trip_tx").delete().eq("trip_id", tripId).eq("transaction_id", txId));
+    must(await sb.from("trip_tx").insert({ trip_id: tripId, transaction_id: txId, action }));
+  },
+  clearTripTx: (tripId, txId) => sb.from("trip_tx").delete().eq("trip_id", tripId).eq("transaction_id", txId).then(must),
+  setCategoryRule: (merchant, category) => sb.rpc("set_category_rule", { hid, p_merchant: merchant, p_category: category }).then(must)
+};
+const DemoStore = {
+  trips: async () => DEMO_DATA.trips.slice().sort((a, b) => (a.start_date < b.start_date ? 1 : -1)),
+  tripTx: async () => DEMO_DATA.tripTx.slice(),
+  txAll: async (a, b) => DEMO_DATA.txs.filter(t => t.occurred_at >= a && t.occurred_at < b),
+  txByIds: async ids => DEMO_DATA.txs.filter(t => ids.includes(t.id)),
+  acct: async (a, b) => DEMO_DATA.acct.filter(t => t.occurred_at >= a && t.occurred_at < b),
+  search: async q => DEMO_DATA.txs.filter(t => (t.merchant + t.note).toLowerCase().includes(q.toLowerCase())),
+  addTrip: async (name, s, e) => { DEMO_DATA.trips.push({ id: "trip" + Date.now(), name, start_date: s, end_date: e }); },
+  deleteTrip: async id => { DEMO_DATA.trips = DEMO_DATA.trips.filter(t => t.id !== id); },
+  setTripTx: async (trip_id, transaction_id, action) => {
+    await DemoStore.clearTripTx(trip_id, transaction_id); DEMO_DATA.tripTx.push({ trip_id, transaction_id, action });
+  },
+  clearTripTx: async (tripId, txId) => {
+    DEMO_DATA.tripTx = DEMO_DATA.tripTx.filter(r => !(r.trip_id === tripId && r.transaction_id === txId));
+  },
+  setCategoryRule: async (merchant, category) => { S.catRules = [{ merchant, category, source: "user" }, ...S.catRules]; }
+};
+let Store = LiveStore;
+
 const PIE_COLORS = ["#0abde3", "#feca57", "#5f27cd", "#ff9f43", "#54a0ff", "#01a3a4", "#f368e0",
                     "#576574", "#3ae374", "#ee5253", "#10ac84", "#8395a7", "#e77f67", "#786fa6"];
 function drawChart(cv, byCat, trend6){
@@ -603,11 +894,11 @@ async function refreshData(){
   if (refreshing || $("app").hidden) return;
   refreshing = true;
   try {
-    await loadStatic();
-    periodCache.clear();
+    tripState = null; tripErr = "";   // 行程跟著重抓（開著的話 paint 會觸發載入）
+    if (!DEMO){ await loadStatic(); periodCache.clear(); }
     buildChips();
     await render(true);
-    liveMark = await dataMark();
+    if (!DEMO) liveMark = await dataMark();
   } catch (e){ console.warn("背景更新失敗，下次再試", e); }
   finally { refreshing = false; }
 }
@@ -735,7 +1026,9 @@ function buildDemo(){
     acct.push({ id: "d" + (++n), account_id: "a2", occurred_at: day(6), amount: 20000, description: "轉入", note: "" });
     acct.push({ id: "i" + (++n), account_id: "a2", occurred_at: day(21), amount: 37, description: "活儲利息", note: "" });
   }
-  DEMO_DATA = { txs, acct };
+  const [ty, tm] = E.ymAdd(now.getFullYear(), now.getMonth() + 1, -1);
+  const trips = [{ id: "trip1", name: "示範：台南三日", start_date: `${ty}-${pad(tm)}-09`, end_date: `${ty}-${pad(tm)}-12` }];
+  DEMO_DATA = { txs, acct, trips, tripTx: [] };
 }
 
 /* ═══════════ 啟動 ═══════════ */
@@ -786,6 +1079,7 @@ function boot(){
   bindNav();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   if (DEMO){
+    Store = DemoStore;
     buildDemo();
     $("demoBadge").hidden = false;
     buildChips();

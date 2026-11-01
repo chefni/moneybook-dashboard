@@ -287,5 +287,68 @@ test("analyze：支出排除互轉與退款、收入含存款進帳、成員篩�
   eq(r.movers[0][0], E.classify("全聯", []));
 });
 
+/* ═══ TripsTest ═══ */
+const trip = (s, e, id = "t1") => ({ id, name: id, start_date: s, end_date: e });
+const jp = trip("2026-02-21", "2026-02-28");
+const ttx = (id, date, extra = {}) => tx(id, 100, date, "expense", "店", "email", extra);
+const ov = o => new Map(Object.entries(o));
+test("天數含頭尾、跨月跨年閏年、壞日期回 1", () => {
+  eq(E.dayCount("2026-02-21", "2026-02-21"), 1); eq(E.dayCount("2026-02-21", "2026-02-28"), 8);
+  eq(E.dayCount("2026-01-31", "2026-02-02"), 3); eq(E.dayCount("2025-12-31", "2026-01-01"), 2);
+  eq(E.dayCount("2028-02-27", "2028-03-01"), 4); eq(E.dayCount("不是日期", "2026-02-28"), 1); eq(E.dayCount("", ""), 1);
+});
+test("區間頭尾都算、前後一天不算、字串比較不被月份位數騙", () => {
+  ok(E.covers(jp, "2026-02-21")); ok(E.covers(jp, "2026-02-28")); ok(E.covers(jp, "2026-02-25"));
+  ok(!E.covers(jp, "2026-02-20")); ok(!E.covers(jp, "2026-03-01"));
+  const t = trip("2026-09-30", "2026-10-02"); ok(E.covers(t, "2026-10-01")); ok(!E.covers(t, "2026-09-29"));
+});
+test("inTrip：例外優先、只認自己那筆、看不懂的 action 退回日期", () => {
+  ok(E.inTrip(ttx("a", "2026-02-25"), jp, ov({}))); ok(!E.inTrip(ttx("b", "2026-03-05"), jp, ov({})));
+  ok(!E.inTrip(ttx("a", "2026-02-25"), jp, ov({ a: "exclude" })));
+  ok(E.inTrip(ttx("a", "2026-01-20"), jp, ov({ a: "include" })));
+  ok(E.inTrip(ttx("b", "2026-02-25"), jp, ov({ a: "exclude" })));
+  ok(E.inTrip(ttx("a", "2026-02-25"), jp, ov({ a: "include" })));
+  ok(E.inTrip(ttx("a", "2026-02-25"), jp, ov({ a: "???" }))); ok(!E.inTrip(ttx("b", "2026-03-05"), jp, ov({ b: "???" })));
+});
+test("tripView：移出的列在 kicked、手動加入的算進 rows、收入不混入", () => {
+  const inn = ttx("in", "2026-02-25"), out = ttx("out", "2026-01-20");
+  let v = E.tripView([inn, out], jp, ov({})); eq(v.rows.map(t => t.id), ["in"]); eq(v.kicked.length, 0);
+  v = E.tripView([inn], jp, ov({ in: "exclude" })); eq(v.rows.length, 0); eq(v.kicked.map(t => t.id), ["in"]);
+  v = E.tripView([out], jp, ov({ out: "include" })); eq(v.rows.map(t => t.id), ["out"]);
+  const all = [inn, out, ttx("x", "2026-02-22")], o = ov({ in: "exclude", out: "include", x: "include" });
+  const vv = E.tripView(all, jp, o), reach = new Set([...vv.rows, ...vv.kicked].map(t => t.id));
+  for (const k of o.keys()) ok(reach.has(k), `${k} 被手動決定過卻找不到`);
+  eq(E.tripView([inn, tx("inc", 100, "2026-02-25", "income")], jp, ov({})).rows.map(t => t.id), ["in"]);
+});
+test("加入候選：不列區間內、排除已在的／疑似重複／非支出、新到舊", () => {
+  eq(E.tripAddCandidates([ttx("in", "2026-02-25"), ttx("out", "2026-01-20")], jp, new Set()).map(t => t.id), ["out"]);
+  eq(E.tripAddCandidates([ttx("out", "2026-01-20")], jp, new Set(["out"])).length, 0);
+  eq(E.tripAddCandidates([ttx("d", "2026-01-20", { dedup_status: "suspect" }),
+    tx("i", 100, "2026-01-20", "income")], jp, new Set()).length, 0);
+  eq(E.tripAddCandidates([ttx("a", "2026-01-01"), ttx("b", "2026-03-10"), ttx("c", "2026-01-15")], jp, new Set())
+     .map(t => t.id), ["b", "c", "a"]);
+});
+test("tripTxAction：等於日期預設就不寫；寫完之後 inTrip＝使用者的意圖", () => {
+  eq(E.tripTxAction(jp, "2026-02-25", true), null); eq(E.tripTxAction(jp, "2026-01-20", false), null);
+  eq(E.tripTxAction(jp, "2026-02-25", false), "exclude"); eq(E.tripTxAction(jp, "2026-01-20", true), "include");
+  for (const date of ["2026-02-25", "2026-01-20"]) for (const want of [true, false]){
+    const a = E.tripTxAction(jp, date, want), t = ttx("a", date);
+    eq(E.inTrip(t, jp, a ? ov({ a }) : ov({})), want, `${date} ${want}`);
+  }
+});
+test("狀態文字五種情形都不一樣", () => {
+  const s = [E.tripMemberState(ttx("a", "2026-02-25"), jp, ov({})), E.tripMemberState(ttx("a", "2026-02-25"), jp, ov({ a: "include" })),
+    E.tripMemberState(ttx("a", "2026-02-25"), jp, ov({ a: "exclude" })), E.tripMemberState(ttx("a", "2026-01-20"), jp, ov({ a: "include" })),
+    E.tripMemberState(ttx("a", "2026-01-20"), jp, ov({}))];
+  eq(new Set(s).size, 5);
+});
+test("tripSummary：總額只算不重複且未排除、分類依計入金額排序", () => {
+  const rows = [tx("a", 500, "2026-02-22", "expense", "壽司"), tx("b", 300, "2026-02-23", "expense", "壽司", "email", { exclude_state: "exclude" }),
+    tx("c", 900, "2026-02-24", "expense", "飯店"), tx("d", 50, "2026-02-25", "expense", "壽司", "email", { dedup_status: "suspect" })];
+  const r = E.tripSummary(jp, rows, ov({}), t => E.effExcludeF(t, new Map(), [], []), t => E.classify(t.merchant, []));
+  eq(r.total, 1400); eq(r.counted.length, 2); eq(r.byCat[0][0], E.classify("飯店", [])); eq(r.days, 8);
+  eq(r.byCat.find(x => x[0] === E.classify("壽司", []))[1].length, 3, "未計入的也要列在原分類");
+});
+
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);

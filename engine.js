@@ -446,7 +446,54 @@ function analyze(d, period, sel, today = todayIso()){
            trend6, fin, movers: prevByCat.size ? movers : [], subs };
 }
 
-const api = { daysApart, amtMatchTransfer, normalizeMerchant, merchantCore, statCategory, incomeCategory,
+/* ── ✈️ 旅遊（Trips.kt）：行程＝日期區間；trip_tx 只存「跟日期預設不一樣」的單筆例外 ── */
+const covers = (trip, date) => date >= trip.start_date && date <= trip.end_date;   // ISO 字串可直接比
+/** 含頭尾天數（2/21~2/21＝1 天）；日期壞掉回 1（顯示用，不值得炸掉）。 */
+function dayCount(a, b){ const n = daysBetween(a, b); return isNaN(n) ? 1 : n + 1; }
+/** 優先序：單筆例外 ＞ 日期區間。overrides＝這趟的 txId → include/exclude。 */
+function inTrip(t, trip, overrides){
+  const o = overrides.get(t.id);
+  return o === "include" ? true : o === "exclude" ? false : covers(trip, t.occurred_at);
+}
+/** rows＝算在這趟的支出；kicked＝被手動移出的（仍要列：那是唯一能加回來的入口）。 */
+function tripView(mine, trip, overrides){
+  const exp = mine.filter(t => t.kind === "expense");
+  return { rows: exp.filter(t => inTrip(t, trip, overrides)), kicked: exp.filter(t => overrides.get(t.id) === "exclude") };
+}
+/** 「把其他消費加進這趟」的候選：只列區間外、不重複的支出，新到舊。 */
+function tripAddCandidates(src, trip, exclude){
+  return src.filter(t => t.kind === "expense" && t.dedup_status === "unique" && t.id != null &&
+                         !exclude.has(t.id) && !covers(trip, t.occurred_at))
+            .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0));
+}
+/** 要讓某筆算／不算這趟時該寫什麼；null＝刪掉例外即可（結果等於日期預設，不留同義紀錄）。 */
+const tripTxAction = (trip, date, want) => (want === covers(trip, date) ? null : want ? "include" : "exclude");
+function tripMemberState(t, trip, overrides){
+  const o = overrides.get(t.id), c = covers(trip, t.occurred_at);
+  if (o === "include") return c ? "手動保留" : "手動加入（日期在區間外）";
+  if (o === "exclude") return "已移出這趟";
+  return c ? "日期在區間內，自動算進這趟" : "不在這趟";
+}
+/** 一趟行程的彙總（TripsSection 的資料段）：總額只算「不重複且沒被排除」的。 */
+function tripSummary(trip, mine, overrides, exc, catOf){
+  const { rows, kicked } = tripView(mine, trip, overrides);
+  const counts = t => t.dedup_status === "unique" && !exc(t)[0];
+  const counted = rows.filter(counts);
+  const total = counted.reduce((a, t) => a + t.amount, 0);
+  const groups = new Map();
+  for (const t of rows){ const c = catOf(t); if (!groups.has(c)) groups.set(c, []); groups.get(c).push(t); }
+  const byCat = [...groups.entries()].map(([c, l]) => [c, l, l.filter(counts).reduce((a, t) => a + t.amount, 0)])
+                  .sort((a, b) => b[2] - a[2]);
+  const manualN = rows.filter(t => overrides.has(t.id)).length + kicked.length;
+  return { rows, kicked, counted, total, byCat, manualN, days: dayCount(trip.start_date, trip.end_date) };
+}
+/** 分類選單（Rules.kt categoryOptions）：labels 空時退回內建清單。 */
+const categoryOptions = labels => (labels.length
+  ? labels.filter(l => l.active !== false).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map(l => [l.key, l.label])
+  : AI_CATS.map(c => [c, c]));
+
+const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxAction, tripMemberState, tripSummary,
+  categoryOptions, daysApart, amtMatchTransfer, normalizeMerchant, merchantCore, statCategory, incomeCategory,
   classify, sortCategoryRules, matchFilterRule, statSource, classifyF, ruleExcludeState, effExclude,
   effExcludeF, incExcludeF, txOwnerId, assetOwnerId, accountDisplay, autoExclusions, buildIncome,
   categoryTotals, monthlyTrend, detectSubscriptions, labelOf, isInvestSell, ymAdd, Period, analyze,
