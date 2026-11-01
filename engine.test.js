@@ -349,6 +349,172 @@ test("tripSummary：總額只算不重複且未排除、分類依計入金額排
   eq(r.total, 1400); eq(r.counted.length, 2); eq(r.byCat[0][0], E.classify("飯店", [])); eq(r.days, 8);
   eq(r.byCat.find(x => x[0] === E.classify("壽司", []))[1].length, 3, "未計入的也要列在原分類");
 });
+test("tripsByRelevance：已算進去的最前、其次日期近、再來出發日早", () => {
+  const a = trip("2026-01-01", "2026-01-05", "a"), b = trip("2026-03-01", "2026-03-03", "b"),
+        c = trip("2026-02-10", "2026-02-12", "c"), d = trip("2026-02-14", "2026-02-15", "d");
+  const t = ttx("x", "2026-02-13");
+  eq(E.tripsByRelevance(t, [a, b, c, d], new Map()).map(x => x.id), ["c", "d", "b", "a"], "c、d 都差 1 天 → 出發日早的先");
+  eq(E.tripsByRelevance(t, [a, b, c, d], new Map([["a", ov({ x: "include" })]]))[0].id, "a", "手動加入的排最前");
+  eq(E.tripDistanceDays("2026-02-11", c), 0); eq(E.tripDistanceDays("壞", c), Infinity);
+});
+
+/* ═══ 第三階段：明細／帳戶／記帳 ═══ */
+test("friendlyReason：對照表、家人互轉保留方向、補上內部轉帳、不認得的照原樣", () => {
+  eq(E.friendlyReason("帳戶互轉"), "自己帳戶間搬錢"); eq(E.friendlyReason("家人互轉 阿華→阿明"), "家人間轉帳 阿華→阿明");
+  eq(E.friendlyReason("內部轉帳"), "自家帳戶間搬錢"); eq(E.friendlyReason("跨表重複"), "與對帳單重複記到");
+  eq(E.friendlyReason("新原因"), "新原因"); eq(E.friendlyReason(null), ""); eq(E.friendlyReason("constructor"), "constructor");
+});
+test("kindLabel、compactNt、ntD、plLabel 的格式同 App", () => {
+  eq(["expense", "income", "invest", "transfer", "x"].map(E.kindLabel), ["支出", "收入", "投資", "轉帳", "x"]);
+  eq(E.compactNt(9999), "9,999"); eq(E.compactNt(12345), "1.2萬"); eq(E.compactNt(-15000), "-1.5萬"); eq(E.compactNt(0), "0");
+  eq(E.ntD(-0.4), "NT$ 0", "四捨五入後才判正負"); eq(E.ntD(-1234.5), "-NT$ 1,234"); eq(E.ntD(1234567), "NT$ 1,234,567");
+  eq(E.plLabel(1234.4, 12.34), "▲ NT$ 1,234（+12.3%）"); eq(E.plLabel(-500, -5), "▼ NT$ 500（−5.0%）");
+  eq(E.signedPct(3.25), "+3.3"); eq(E.signedPct(-0.04), "-0.0");
+});
+test("金額欄只收 1～9 位正整數、餘額欄收負數（§6-8）", () => {
+  eq(E.parseAmount("500"), 500); eq(E.parseAmount(" 007 "), 7); eq(E.parseAmount("0"), null);
+  eq(E.parseAmount("1234567890"), null, "10 位會超過 Int"); eq(E.parseAmount("12a"), null); eq(E.parseAmount(""), null);
+  eq(E.parseBalance("-2400000"), -2400000); eq(E.parseBalance("0"), 0); eq(E.parseBalance(""), null); eq(E.parseBalance("1-2"), null);
+  eq(E.parseBalance("1234.5"), 1234.5, "匯入的餘額有小數"); eq(E.parseBalance("1."), null);
+});
+test("手記分類：找 icon＋name 相同的列，沒有就照 key 拆出 icon 與 name、排在最後（§6-1）", () => {
+  const cats = [{ id: "c1", icon: "🍜", name: "飲食", sort_order: 0 }, { id: "c2", icon: null, name: "雜項", sort_order: 4 }];
+  eq(E.findCategory("🍜 飲食", cats).id, "c1"); eq(E.findCategory("📦 雜項", cats).id, "c2", "沒有 icon 的列與 classifyF 同樣當 📦");
+  eq(E.findCategory("🛒 網購", cats), null);
+  eq(E.newCategory("🛒 網購", cats), { icon: "🛒", name: "網購", kind: "expense", sort_order: 5 });
+  eq(E.newCategory("雜費", []), { icon: "📦", name: "雜費", kind: "expense", sort_order: 0 });
+  const made = { id: "c3", ...E.newCategory("🛒 網購", cats) };
+  eq(E.classifyF(tx("m", 100, "2026-02-01", "expense", "網購", "manual", { category_id: "c3" }), [], [], [...cats, made]), "🛒 網購",
+     "建出來的列，classifyF 回的正是選的 key");
+});
+test("overBudget 只列超支的；dueSoon 夾 28 號、跨月、7 天內含當天", () => {
+  const labels = [{ key: "a", label: "A", budget: 100 }, { key: "b", label: "B", budget: 100 }, { key: "c", label: "C", budget: null }];
+  eq(E.overBudget(labels, [["a", 150], ["b", 100], ["c", 999]]), [{ label: "A", spent: 150, budget: 100 }]);
+  const r = (name, due_day, active = true) => ({ name, due_day, active });
+  eq(E.dueSoon([r("今天", 10), r("三天後", 13), r("太遠", 20), r("已過", 9), r("停用", 11, false)], "2026-02-10"),
+     [{ name: "今天", days: 0, day: 10 }, { name: "三天後", days: 3, day: 13 }]);
+  eq(E.dueSoon([r("月底", 31)], "2026-02-25"), [{ name: "月底", days: 3, day: 28 }], "31 號夾成 28 號");
+  eq(E.dueSoon([r("跨月", 2)], "2026-12-28"), [{ name: "跨月", days: 5, day: 2 }], "已過就看下個月（跨年）");
+});
+test("期間 fileTag：整月 2026-02、區間 起_迄", () => {
+  eq(E.Period.fileTag(E.Period.month(2026, 2)), "2026-02");
+  eq(E.Period.fileTag(E.Period.range("2026-02-01", "2026-02-15")), "2026-02-01_2026-02-15");
+});
+
+/* ── 明細頁 detailView ── */
+const detailFixture = (extra = {}) => ({
+  members: [me, her], accounts: [accA, accB, accC], catRules: [], labels: [], excludeRules: [], filterRules: [], cats: [],
+  txsAll: [
+    tx("e1", 500, "2026-02-03", "expense", "全聯", "email", { family_member_id: "m1" }),
+    tx("e2", 300, "2026-02-05", "expense", "全聯", "notification", { family_member_id: "m1" }),
+    tx("s1", 300, "2026-02-05", "expense", "全聯", "email", { family_member_id: "m1", dedup_status: "suspect" }),
+    tx("x1", 80, "2026-02-06", "expense", "全聯", "email", { family_member_id: "m1", exclude_state: "exclude" }),
+    tx("a1", 999, "2026-02-07", "expense", "全聯", "email", { family_member_id: "m1", dedup_status: "aux" }),
+    tx("h1", 1200, "2026-02-04", "expense", "UNIQLO", "email", { family_member_id: "m2" }),
+    tx("i1", 300, "2026-02-12", "invest", "普買 台積電", "email", { family_member_id: "m1" }),
+    tx("o1", 100, "2026-01-31", "expense", "前月", "email", { family_member_id: "m1" })
+  ].filter(t => t.occurred_at >= "2026-02-01"),
+  acctTxnsWide: [acct("s", "A", 60000, "2026-02-05", "薪資"), acct("w", "A", -10000, "2026-02-06", "轉出"),
+                 acct("d", "B", 10000, "2026-02-06", "轉入"), acct("q", "C", 777, "2026-02-08", "代收款"),
+                 acct("p", "A", -50, "2026-01-29", "手續費")],
+  ...extra
+});
+test("detailView：支出只算不重複且未排除；疑似重複與排除都列出、算進「未計」；aux 不列", () => {
+  const v = E.detailView(detailFixture(), E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.te, 2000, "500＋300＋1200"); eq(v.provisional, 300, "刷卡通知那筆");
+  eq(v.expRows.map(r => r.t.id), ["x1", "e2", "s1", "h1", "e1"], "新到舊、aux 不在裡面");
+  const g = v.groups.find(g => g.key === E.classify("全聯", []));
+  eq([g.rows.length, g.off, g.suspect, g.total], [4, 2, 1, 800]);
+  eq(v.groups.reduce((a, g) => a + g.rows.length, 0), v.expRows.length, "群組筆數加總＝摘要筆數（§6-13）");
+  eq(v.excluded.exp.map(r => r.t.id), ["x1"]); eq(v.excluded.other.map(o => o.tag), ["投資買入"]); eq(v.excluded.invTotal, 300);
+});
+test("detailView：收入含存款進帳、互轉不計；存款流水與收入檢視對同一列判定一致（§6-10）", () => {
+  const f = filter("exclude", { kw: "代收", direction: "income" });
+  const v = E.detailView(detailFixture({ filterRules: [f] }), E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.income.total, 60000, "薪資計入；互轉與篩選器排除的不計");
+  const inc = v.income.rows.find(r => r.i.id === "q"), bank = v.bank.rows.find(r => r.a.id === "q");
+  eq([inc.ex, inc.why], [true, "篩選器"]); eq([bank.ex, bank.why], [inc.ex, inc.why], "同一列兩個檢視的狀態相同");
+  eq(v.bank.rows.map(r => r.a.id), ["q", "w", "d", "s"], "嚴格本期、新到舊（1/29 那筆只在寬窗）");
+  eq([v.bank.inSum, v.bank.outSum], [60000, 0], "互轉兩邊與篩選器排除的都不計");
+  eq(v.excluded.count, 1 + 1 + 2, "投資＋排除的支出＋排除的收入（互轉轉入、代收款）");
+});
+test("detailView：成員篩選、待確認收入、整月才比超支、空資料", () => {
+  const d = detailFixture({ labels: [{ key: E.classify("全聯", []), label: "全聯類", budget: 600 }],
+    reminders: [{ name: "卡費", due_day: 22, active: true }] });
+  const v2 = E.detailView(d, E.Period.month(2026, 2), "m2", "2026-02-20");
+  eq(v2.te, 1200); eq(v2.bank.rows.map(r => r.a.id), ["q"], "只留阿華的帳戶");
+  eq(v2.over, [], "選了單一成員不比全家預算（同分析頁）");
+  const v = E.detailView(d, E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.over, [{ label: "全聯類", spent: 800, budget: 600 }]); eq(v.due, [{ name: "卡費", days: 2, day: 22 }]);
+  eq(E.detailView(d, E.Period.range("2026-02-01", "2026-02-28"), null, "2026-02-20").over, [], "自訂區間不比預算");
+  const old = E.detailView({ ...d, txsAll: [], acctTxnsWide: [acct("t", "A", 5000, "2026-02-06", "跨行轉入")] },
+    E.Period.month(2026, 2), null, "2026-04-20");
+  eq([old.income.pendingN, old.income.pendingAmt], [1, 5000], "超過 45 天沒配到轉出 → 待確認收入");
+  ok(E.detailView({ ...d, txsAll: [], acctTxnsWide: [] }, E.Period.month(2026, 2), null).empty);
+});
+test("detailView 與 analyze 的支出同一個數：退款不會配到疑似重複那筆", () => {
+  const base = { members: [me, her], accounts: [], catRules: [], labels: [], excludeRules: [], filterRules: [], cats: [],
+    subIgnores: new Set(), prevTxs: [], range6: [], acctTxnsWide: [] };
+  const txsAll = [tx("s1", 1200, "2026-02-04", "expense", "UNIQLO", "notification", { dedup_status: "suspect" }),
+                  tx("e1", 1200, "2026-02-04", "expense", "UNIQLO"), tx("e2", 300, "2026-02-05", "expense", "全聯"),
+                  tx("r1", 1200, "2026-02-09", "income", "UNIQLO")];
+  const p = E.Period.month(2026, 2);
+  const v = E.detailView({ ...base, txsAll }, p, null, "2026-02-20");
+  const a = E.analyze({ ...base, txs: txsAll.filter(t => t.dedup_status === "unique") }, p, null, "2026-02-20");
+  eq([v.te, a.te], [300, 300], "退款對消的是不重複的 e1");
+  eq(v.expRows.find(r => r.t.id === "e1").why, "退款對消");
+});
+test("決定納不納入的篩選規則：只認 exclude／include、收入看描述與來源", () => {
+  const ex = filter("exclude", { kw: "代收" }), cat = filter("cat:📦 其他", { kw: "全聯" });
+  eq(E.txExclusionFilter(tx("a", 100, "2026-02-01", "expense", "代收水費"), [ex]), ex);
+  eq(E.txExclusionFilter(tx("b", 100, "2026-02-01", "expense", "全聯"), [cat]), null, "分類規則不算");
+  eq(E.incomeExclusionFilter({ desc: "代收款", source: "某銀行", amount: 5 }, [ex]), ex);
+  const v = E.detailView(detailFixture({ filterRules: [ex] }), E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.bank.rows.find(r => r.a.id === "q").rule, ex, "存入列帶著那條規則");
+  eq(v.bank.rows.find(r => r.a.id === "w").rule, null, "轉出列不經篩選器");
+});
+test("newestFirst：新到舊、同日保持原順序、可指定日期欄", () => {
+  const rows = [{ id: 1, d: "2026-01-02" }, { id: 2, d: "2026-01-03" }, { id: 3, d: "2026-01-02" }];
+  eq(rows.slice().sort(E.newestFirst(r => r.d)).map(r => r.id), [2, 1, 3]);
+  eq(E.addDays("2026-02-28", 1), "2026-03-01");
+});
+test("monthCsv：BOM、分類用 classifyF、疑似重複與排除原因、引號跳脫、公式防護", () => {
+  const cats = [{ id: "c1", icon: "🍜", name: "飲食" }];
+  const d = { members: [me], catRules: [], filterRules: [], cats, labels: [] };
+  const rows = [tx("a", 100, "2026-02-01", "expense", "", "manual", { note: "午餐 \"便當\"", category_id: "c1", family_member_id: "m1" }),
+                tx("b", 200, "2026-02-03", "expense", "=HYPERLINK()", "email", { dedup_status: "suspect" })];
+  const csv = E.monthCsv(rows, d, t => (t.id === "b" ? "你手動排除" : ""));
+  ok(csv.startsWith("\uFEFF日期,類型,金額,"), "BOM＋表頭");
+  const lines = csv.trim().split("\n");
+  eq(lines[1], `2026-02-03,支出,200,"'=HYPERLINK()","${E.classify("=HYPERLINK()", [])}","email","","疑似重複","你手動排除"`);
+  eq(lines[2], `2026-02-01,支出,100,"午餐 ""便當""","🍜 飲食","手動記帳","阿明","",""`);
+});
+
+/* ── 帳戶 portfolio ── */
+test("assetGroup：負數＝負債、存款、證券、基金信託、其他", () => {
+  eq(E.assetGroup({ type: "bank" }, -1), "負債"); eq(E.assetGroup({ type: "bank" }, 5), "存款");
+  eq(E.assetGroup({ type: "stock", name: "某投信·全球基金" }, 5), "基金信託"); eq(E.assetGroup({ type: "stock", name: "某證券·台積電" }, 5), "證券");
+  eq(E.assetGroup({ type: "cash" }, 0), "其他"); eq(E.assetGroup({ type: "credit_card" }, 0), "其他");
+});
+test("portfolio：最新快照、資產負債淨值、趨勢沿用前值、沒快照的帳戶也列出（§6-4）、投資總覽", () => {
+  const accts = [{ id: "A", name: "玉山(阿明)·活存", type: "bank" }, { id: "S", name: "某證券(阿明)·台積電", type: "stock" },
+                 { id: "L", name: "某銀行(阿明)·房貸", type: "bank" }, { id: "N", name: "現金", type: "cash", member_id: "m2" }];
+  const snap = (account_id, snapshot_date, balance, cost = null) => ({ account_id, snapshot_date, balance, cost });
+  const p = E.portfolio(accts, [snap("A", "2026-01-31", 1000), snap("A", "2026-02-28", 1500), snap("S", "2026-02-15", "1200", "1000"),
+                                snap("L", "2026-01-31", -800)]);
+  eq(p.latest.get("A").balance, 1500); eq(p.latest.get("S").balance, 1200, "numeric 字串轉成數字");
+  eq([p.assets, p.debts, p.net], [2700, -800, 1900]);
+  eq(p.trend, [["2026-01-31", 200], ["2026-02-15", 1400], ["2026-02-28", 1900]], "同日合併、其他帳戶沿用前值");
+  eq(p.groups.map(g => g.name), ["存款", "證券", "其他", "負債"]);
+  eq(p.groups.find(g => g.name === "其他").rows.map(r => [r.a.id, r.s]), [["N", null]], "沒快照照樣在");
+  const sec = p.groups.find(g => g.name === "證券"); eq([sec.total, sec.cost, sec.pl], [1200, 1000, 200]);
+  eq(p.invest, { mv: 1200, cost: 1000, pl: 200, pct: 20 }); eq(p.holdings.map(h => h.a.id), ["S"]);
+  eq(p.alloc, [["存款", 1500], ["證券", 1200]], "只算正餘額");
+  const [a2, s2] = E.forMember(accts, p.snapshots, "m2", [me, her]);
+  eq([a2.map(a => a.id), s2.length], [["N"], 0]);
+  eq(E.forMember(accts, p.snapshots, null, [me, her])[0].length, 4);
+  eq(E.portfolio([], []).invest, null);
+});
 
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);

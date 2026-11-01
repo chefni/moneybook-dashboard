@@ -13,9 +13,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
-      - name: 只允許兩個頁面＋對帳自測＋PWA 外殼＋記帳規則引擎
+      - name: 只允許兩個頁面＋對帳自測＋PWA 外殼＋記帳規則引擎＋明細/帳戶畫面程式
         run: |
-          bad=$(git ls-files | grep -vE '^(index|billbook)\.html$|^\.nojekyll$|^(selftest|sw|engine|engine\.test|classify_data)\.js$|^manifest\.webmanifest$|^icon-(192|512|maskable-512)\.png$|^\.github/workflows/guard\.yml$' || true)
+          bad=$(git ls-files | grep -vE '^(index|billbook)\.html$|^\.nojekyll$|^(selftest|sw|engine|engine\.test|classify_data|detail|accounts|demo)\.js$|^manifest\.webmanifest$|^icon-(192|512|maskable-512)\.png$|^\.github/workflows/guard\.yml$' || true)
           if [ -n "$bad" ]; then
             echo "::error::出現白名單以外的檔案，可能外洩私人資料："
             echo "$bad"

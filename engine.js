@@ -24,6 +24,8 @@ const parseDay = t => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s(t)); return 
 const addDays = (t, n) => iso(new Date(parseDay(t) + n * 86400000));
 function todayIso(){ const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 const notMergedAux = t => t.dedup_status !== "merged" && t.dedup_status !== "aux";
+/** 新到舊的比較器；同日維持原順序（相等回 0，排序才穩定）。dateOf 預設看 occurred_at。 */
+const newestFirst = (dateOf = t => t.occurred_at) => (a, b) => (dateOf(a) < dateOf(b) ? 1 : dateOf(a) > dateOf(b) ? -1 : 0);
 
 /** Rules.kt daysApart：解析失敗當 999 天。 */
 function daysApart(a, b){
@@ -190,6 +192,11 @@ function incExcludeF(i, auto, excludeRules, filters){
   if (f && f.action === "include") return [false, ""];
   return effExclude(null, i.id, i.desc, auto, excludeRules);
 }
+/** 決定這筆「納不納入」的篩選規則（action 是 exclude／include 的那條；沒有回 null）。
+ *  篩選器排在商家排除規則前面（優先序 ②＞③）：有這條時，「以後同 X 都…」的永久規則對這筆不會生效。 */
+const decides = f => (f && (f.action === "exclude" || f.action === "include") ? f : null);
+const txExclusionFilter = (t, filters) => decides(matchFilterRule(t.merchant, t.note, statSource(t), t.amount, t.kind, filters));
+const incomeExclusionFilter = (i, filters) => decides(matchFilterRule(i.desc, "", i.source, i.amount, "income", filters));
 
 /* ── 歸屬（Portfolio.kt txOwnerId／assetOwnerId／AssetAccount.display） ── */
 function txOwnerId(t, members){
@@ -294,7 +301,7 @@ function buildIncome(txIncome, acctTxns, accounts, members){
       source: acc ? accountDisplay(acc, members) : "存款帳戶",
       memberId: acc ? assetOwnerId(acc, members) : null, exclude_state: a.exclude_state ?? null };
   });
-  return fromTx.concat(fromAcct).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return fromTx.concat(fromAcct).sort(newestFirst(x => x.date));
 }
 
 /* ── 彙總（Rules.kt categoryTotals／monthlyTrend／detectSubscriptions） ── */
@@ -386,7 +393,8 @@ const Period = {
   },
   canNext(p, today = todayIso()){
     return p.type === "month" ? ymKey(p.y, p.m) < today.slice(0, 7) : p.end < today;
-  }
+  },
+  fileTag: p => (p.type === "month" ? ymKey(p.y, p.m) : `${p.start}_${p.end}`)   // MainActivity.kt Period.fileTag
 };
 
 /* ── 分析頁一次算完（MainActivity.kt AnalysisScreen 的資料段，逐行對照） ──
@@ -416,7 +424,7 @@ function analyze(d, period, sel, today = todayIso()){
       .map(([t, e]) => ({ date: t.occurred_at, name: isBlank(t.merchant) ? s(t.note) : t.merchant, reason: e[1], amount: t.amount, dir: "支出" })),
     ...incomeSel.map(i => [i, incExc(i)]).filter(([, e]) => e[0])
       .map(([i, e]) => ({ date: i.date, name: i.desc, reason: e[1], amount: i.amount, dir: "收入" }))
-  ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  ].sort(newestFirst(x => x.date));
   const ti = income.reduce((a, i) => a + i.amount, 0);
   const incByCat = groupSum(income, i => i.category);
   const byCat = categoryTotals(exp, catRules, filterRules, cats);
@@ -464,7 +472,7 @@ function tripView(mine, trip, overrides){
 function tripAddCandidates(src, trip, exclude){
   return src.filter(t => t.kind === "expense" && t.dedup_status === "unique" && t.id != null &&
                          !exclude.has(t.id) && !covers(trip, t.occurred_at))
-            .sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0));
+            .sort(newestFirst());
 }
 /** 要讓某筆算／不算這趟時該寫什麼；null＝刪掉例外即可（結果等於日期預設，不留同義紀錄）。 */
 const tripTxAction = (trip, date, want) => (want === covers(trip, date) ? null : want ? "include" : "exclude");
@@ -491,12 +499,239 @@ function tripSummary(trip, mine, overrides, exc, catOf){
 const categoryOptions = labels => (labels.length
   ? labels.filter(l => l.active !== false).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map(l => [l.key, l.label])
   : AI_CATS.map(c => [c, c]));
+/** 消費日期距行程幾天（區間內＝0；Trips.kt tripDistanceDays）。日期壞掉排最後。 */
+function tripDistanceDays(date, trip){
+  const d = parseDay(date), a = parseDay(trip.start_date), z = parseDay(trip.end_date);
+  if (isNaN(d) || isNaN(a) || isNaN(z)) return Infinity;
+  return d < a ? (a - d) / 86400000 : d > z ? (d - z) / 86400000 : 0;
+}
+/** 編輯對話框的行程順序（Trips.kt tripsByRelevance）：已算在裡面的 → 日期近的 → 出發日早的。只影響顯示。
+ *  overrides＝tripId → (txId → action)。 */
+function tripsByRelevance(t, trips, overrides){
+  const key = tp => [inTrip(t, tp, overrides.get(tp.id) || new Map()) ? 0 : 1, tripDistanceDays(t.occurred_at, tp), s(tp.start_date)];
+  return trips.map(tp => [tp, key(tp)])
+    .sort(([, a], [, b]) => a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0))
+    .map(([tp]) => tp);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  第三階段（2026-11-01）：明細、帳戶、記一筆。對照 MainActivity.kt DetailScreen／Portfolio.kt。
+ *  與 App 刻意不同的地方都是修 App 的 bug，註解標 §6-n（phase3 盤點的編號）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/** 排除原因 → 白話（MainActivity.kt friendlyReason）；只影響顯示，判定仍用原字串。
+ *  補上 App 漏掉的「內部轉帳」（§6-15）。 */
+const FRIENDLY = new Map([["帳戶互轉", "自己帳戶間搬錢"], ["轉帳(進出相抵)", "同帳戶進出相抵"],
+  ["自家轉入", "自家帳戶轉入"], ["自家轉入(待配對)", "自家轉入（確認中）"], ["待確認收入", "可能是漏記的收入？"],
+  ["信用卡退款/返還", "刷卡退款"], ["退款對消", "退款抵掉原消費"], ["與對帳單重複", "與對帳單重複記到"],
+  ["跨表重複", "與對帳單重複記到"], ["篩選器", "你設的篩選規則"], ["規則排除", "你設的商家規則"],
+  ["手動排除", "你手動排除"], ["投資買入", "買股票（不算花費）"], ["投資賣出", "賣股票（不算收入）"],
+  ["轉帳", "轉帳（不算花費）"], ["內部轉帳", "自家帳戶間搬錢"]]);
+function friendlyReason(r){
+  r = s(r);
+  return r.startsWith("家人互轉") ? "家人間轉帳" + r.slice(4) : FRIENDLY.get(r) ?? r;   // 保留「甲→乙」方向
+}
+const KINDS = new Map([["expense", "支出"], ["income", "收入"], ["invest", "投資"], ["transfer", "轉帳"]]);
+const kindLabel = kind => KINDS.get(kind) ?? s(kind);                  // Rules.kt kindLabel
+
+const grouped = n => Math.abs(n).toLocaleString("en-US");
+/** 精簡金額（Portfolio.kt compactNt）：一萬以上「1.2萬」，否則千分位。 */
+const compactNt = n => (Math.abs(n) >= 10000 ? (n / 10000).toFixed(1) + "萬" : (n < 0 ? "-" : "") + grouped(Math.round(n)));
+/** 帶號金額（Portfolio.kt ntD）：先四捨五入再判正負，-0.4 不會顯示成「-NT$ 0」。 */
+function ntD(n){ const r = Math.round(Number(n) || 0); return (r < 0 ? "-NT$ " : "NT$ ") + grouped(r); }
+/** 報酬率「+12.3」（Kotlin "%+.1f"）。 */
+const signedPct = p => (p >= 0 ? "+" : "-") + Math.abs(p).toFixed(1);
+/** 未實現損益標籤（Portfolio.kt plLabel）：▲/▼ 金額（±%）。配色台灣慣例：賺紅賠綠，由畫面決定。 */
+const plLabel = (pl, pct) => `${pl >= 0 ? "▲" : "▼"} ${ntD(Math.abs(pl))}（${pl >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(1)}%）`;
+
+/** 金額欄（§6-8）：只收 1～9 位數字且 > 0；其餘回 null（App 沒上限，超過 Int 會閃退、0 也收）。 */
+const parseAmount = v => { const t = s(v).trim(); return /^\d{1,9}$/.test(t) && +t > 0 ? +t : null; };
+/** 餘額欄（負數＝負債；可帶小數——對帳單匯入的餘額有小數，預填回去要能原樣存）；空白或看不懂回 null。 */
+const parseBalance = v => { const t = s(v).trim(); return /^-?\d{1,13}(\.\d{1,4})?$/.test(t) ? +t : null; };
+
+/* ── 手記的分類（§6-1、6-2）：分類一律用 category_labels 的 key（如「🍜 飲食」）；
+ *    手記列要的 category_id 指向 categories 表裡「icon name」等於這個 key 的那一列，沒有就建一列。 */
+const catKey = c => `${c.icon || "📦"} ${c.name}`;                    // 與 classifyF 的寫法一致
+const findCategory = (key, cats) => cats.find(c => catKey(c) === key) || null;
+function newCategory(key, cats){
+  const i = s(key).indexOf(" ");
+  const [icon, name] = i > 0 ? [key.slice(0, i), key.slice(i + 1).trim()] : ["📦", s(key).trim()];
+  const sort_order = cats.reduce((m, c) => Math.max(m, (c.sort_order ?? 0) + 1), 0);
+  return { icon, name, kind: "expense", sort_order };
+}
+
+/** 超支（Rules.kt overBudget）：有設預算且花超過的分類。 */
+const overBudget = (labels, byCat) => labels.filter(l => (l.budget || 0) > 0)
+  .map(l => ({ label: l.label, spent: (byCat.find(x => x[0] === l.key) || [, 0])[1], budget: l.budget }))
+  .filter(x => x.spent > x.budget);
+/** 7 天內到期的帳單（Rules.kt dueSoon）：繳款日夾到 1～28，免得 2 月沒有 30 號時提醒消失。 */
+function dueSoon(reminders, today = todayIso(), within = 7){
+  return reminders.filter(r => r.active !== false).map(r => {
+    const day = Math.min(28, Math.max(1, +r.due_day || 1));
+    let due = `${today.slice(0, 8)}${pad(day)}`;
+    if (due < today) due = `${ymKey(...ymAdd(+today.slice(0, 4), +today.slice(5, 7), 1))}-${pad(day)}`;
+    return { name: r.name, days: daysBetween(today, due), day };
+  }).filter(x => x.days >= 0 && x.days <= within);
+}
+
+/* ── 明細頁一次算完（MainActivity.kt DetailScreen 的資料段，:704-752） ──
+ *  d：{ txsAll（本期非 merged，含 suspect）, acctTxnsWide, members, accounts, catRules, labels,
+ *       excludeRules, filterRules, cats, reminders }。回傳畫面要的全部數字與分好組的列。 */
+function detailView(d, period, sel, today = todayIso()){
+  const { members, accounts, catRules, labels, excludeRules, filterRules, cats } = d;
+  const mStart = Period.startDate(period), mNext = Period.endExclusive(period);
+  const newest = newestFirst(x => x.date);
+  const sum = (list, amt = x => x.amount) => list.reduce((a, x) => a + amt(x), 0);
+  // aux（舊通知層）一律不列（§6-12：App 把它畫成正常列卻不計，看起來像總額算錯）
+  const all = d.txsAll.filter(notMergedAux);
+  const acctTxns = d.acctTxnsWide.filter(a => a.occurred_at >= mStart && a.occurred_at < mNext);
+  // 自動偵測用全家資料算（寬窗配跨月互轉），再依人篩選顯示。只拿「不重複」的去配對——跟分析頁同一份輸入：
+  // App 連疑似重複一起配，退款可能配到疑似重複那筆，結果不重複的那筆在明細照算、在分析被對消，兩頁總額對不起來
+  const [autoTx, autoAcct] = autoExclusions(all.filter(t => t.dedup_status === "unique"), d.acctTxnsWide, accounts, members, today);
+  const txExc = t => effExcludeF(t, autoTx, excludeRules, filterRules);
+  const incExc = i => incExcludeF(i, i.kind === "tx" ? autoTx : autoAcct, excludeRules, filterRules);
+  const txs = sel == null ? all : all.filter(t => txOwnerId(t, members) === sel);
+
+  // 支出：列出全部（含疑似重複、已排除，灰字），只算「不重複且未排除」的
+  const expRows = txs.filter(t => t.kind === "expense").map(t => {
+    const [ex, why] = txExc(t);
+    return { t, date: t.occurred_at, ex, why, suspect: t.dedup_status === "suspect", rule: txExclusionFilter(t, filterRules) };
+  }).sort(newest);
+  const counts = r => !r.ex && !r.suspect;
+  const exp = expRows.filter(counts).map(r => r.t);
+  const te = sum(exp);
+  const byCat = categoryTotals(exp, catRules, filterRules, cats);
+  // 依分類：群組標題的「n 筆、m 未計」與摘要「共 N 筆」同一個定義＝列出來的列（§6-13）
+  const gm = new Map();
+  for (const r of expRows){ const k = classifyF(r.t, catRules, filterRules, cats); if (!gm.has(k)) gm.set(k, []); gm.get(k).push(r); }
+  const groups = [...gm].map(([key, rows]) => ({ key, rows, total: sum(rows.filter(counts), r => r.t.amount),
+      off: rows.filter(r => !counts(r)).length, suspect: rows.filter(r => r.suspect).length }))
+    .sort((a, b) => b.total - a.total);
+
+  // 收入：交易表 income ＋ 存款存入（嚴格本期）
+  const income0 = buildIncome(all.filter(t => t.dedup_status === "unique" && t.kind === "income"), acctTxns, accounts, members);
+  const incRows = (sel == null ? income0 : income0.filter(i => i.memberId === sel))
+    .map(i => { const [ex, why] = incExc(i); return { i, date: i.date, ex, why, rule: incomeExclusionFilter(i, filterRules) }; });
+  const im = new Map();
+  for (const r of incRows){ if (!im.has(r.i.category)) im.set(r.i.category, []); im.get(r.i.category).push(r); }
+  const incGroups = [...im].map(([key, rows]) => ({ key, rows, total: sum(rows.filter(r => !r.ex), r => r.i.amount),
+      off: rows.filter(r => r.ex).length }))
+    .sort((a, b) => b.total - a.total);
+  const pending = incRows.filter(r => r.why === "待確認收入");
+
+  // 存款流水：存入列與收入檢視用同一個判定（含篩選器），轉出列用 effExclude——同一列兩處狀態一致（§6-10）
+  const acctById = new Map(accounts.map(a => [a.id, a]));
+  const depositItem = new Map(income0.filter(i => i.kind === "acct").map(i => [i.id, i]));
+  const bankRows = acctTxns.filter(a => {
+    const acc = acctById.get(a.account_id);
+    return sel == null || (acc != null && assetOwnerId(acc, members) === sel);
+  }).map(a => {
+    const acc = acctById.get(a.account_id), dep = depositItem.get(a.id);
+    const [ex, why] = dep ? incExc(dep) : effExclude(a.exclude_state, a.id, a.description, autoAcct, excludeRules);
+    return { a, date: a.occurred_at, ex, why, account: acc ? accountDisplay(acc, members) : "存款帳戶",
+             rule: dep ? incomeExclusionFilter(dep, filterRules) : null };   // 轉出列不經篩選器（同 App）
+  }).sort(newest);
+
+  // 已排除：投資／轉帳（不計收支但要看得到）＋被排除的支出與收入
+  const other = txs.filter(t => t.dedup_status === "unique" && (t.kind === "invest" || t.kind === "transfer"))
+    .map(t => ({ t, date: t.occurred_at, tag: t.kind === "transfer" ? "轉帳" : isInvestSell(t) ? "投資賣出" : "投資買入" }))
+    .sort(newest);
+  const exclExp = expRows.filter(r => r.ex && !r.suspect);
+  const exclInc = incRows.filter(r => r.ex);
+  return {
+    txs, te, byCat, expRows, groups, txExc,
+    provisional: sum(exp.filter(t => t.source === "notification")),
+    income: { rows: incRows, groups: incGroups, total: sum(incRows.filter(r => !r.ex), r => r.i.amount),
+              pendingN: pending.length, pendingAmt: sum(pending, r => r.i.amount) },
+    bank: { rows: bankRows, inSum: sum(bankRows.filter(r => !r.ex && r.a.amount > 0), r => r.a.amount),
+            outSum: sum(bankRows.filter(r => !r.ex && r.a.amount < 0), r => -r.a.amount) },
+    excluded: { other, exp: exclExp, inc: exclInc, count: other.length + exclExp.length + exclInc.length,
+                invTotal: sum(other.filter(o => o.t.kind === "invest" && !isInvestSell(o.t)), o => o.t.amount) },
+    // 超支只在「合併＋整月」時比，同分析頁的「本月預算」：預算是全家整月的額度，拿去比單一成員或自訂區間會失真
+    over: sel == null && period.type === "month" ? overBudget(labels, byCat) : [],
+    due: dueSoon(d.reminders || [], today),
+    empty: !txs.length && !incRows.length && !bankRows.length
+  };
+}
+
+/** 匯出 CSV（MainActivity.kt buildMonthCsv）：UTF-8 BOM 讓 Excel 開中文不亂碼。
+ *  分類欄改用 classifyF（§6-6：App 用 classify，跟畫面上的分類對不起來）。
+ *  文字欄開頭是 = + - @ 時前面補 '，Excel 才不會把商家名當公式執行。 */
+function monthCsv(txs, d, exclusionOf = () => ""){
+  const esc = v => `"${s(v).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
+  const status = { suspect: "疑似重複", merged: "已合併" };
+  const owner = t => { const m = d.members.find(m => m.id === txOwnerId(t, d.members)); return m ? m.name : ""; };
+  const rows = txs.slice().sort(newestFirst())
+    .map(t => [t.occurred_at, kindLabel(t.kind), t.amount].join(",") + "," +
+      [isBlank(t.merchant) ? t.note : t.merchant, labelOf(classifyF(t, d.catRules, d.filterRules, d.cats), d.labels),
+       statSource(t), owner(t), status[t.dedup_status] || "", exclusionOf(t)].map(esc).join(","));
+  return "\uFEFF日期,類型,金額,商家/備註,分類,來源,成員,狀態,排除原因\n" + rows.map(r => r + "\n").join("");
+}
+
+/* ── 帳戶（Portfolio.kt assetGroup／forMember／PortfolioData／InvestSection） ── */
+/** 帳戶分組：負數＝負債；bank＝存款；stock 名稱含基金/信託＝基金信託，否則證券；其餘＝其他。 */
+function assetGroup(acc, balance){
+  if (balance < 0) return "負債";
+  if (acc.type === "bank") return "存款";
+  if (acc.type === "stock") return /基金|信託/.test(s(acc.name)) ? "基金信託" : "證券";
+  return "其他";
+}
+const ASSET_GROUPS = ["存款", "證券", "基金信託", "其他", "負債"];
+/** 依成員篩選（Portfolio.kt forMember）：只留歸屬此人的帳戶與它們的快照；sel=null＝全家。 */
+function forMember(accounts, snapshots, sel, members){
+  if (sel == null) return [accounts, snapshots];
+  const keep = new Set(accounts.filter(a => assetOwnerId(a, members) === sel).map(a => a.id));
+  return [accounts.filter(a => keep.has(a.id)), snapshots.filter(x => keep.has(x.account_id))];
+}
+/** 帳戶頁一次算完（Portfolio.kt PortfolioData＋AccountsScreen 分組＋InvestSection）。
+ *  餘額＝每個帳戶最新一筆快照（沒有流水）。沒有快照的帳戶也列在所屬分組（§6-4：App 會整個藏起來，
+ *  手動新增時餘額留白的帳戶就再也找不到）。 */
+function portfolio(accounts, snapshots){
+  const snaps = snapshots.map(x => ({ ...x, balance: Number(x.balance), cost: x.cost == null ? null : Number(x.cost) }))
+    .sort(newestFirst(x => x.snapshot_date));
+  const latest = new Map();
+  for (const x of snaps) if (!latest.has(x.account_id)) latest.set(x.account_id, x);
+  let assets = 0, debts = 0;
+  for (const x of latest.values()) if (x.balance > 0) assets += x.balance; else debts += x.balance;
+  // 淨值趨勢（舊→新）：每個基準日＝各帳戶「當天或之前最近一次」餘額的加總（App v93 的修正）
+  const asOf = new Map(), trend = [];
+  for (const x of snaps.slice().reverse()){
+    asOf.set(x.account_id, x.balance);
+    const v = [...asOf.values()].reduce((a, b) => a + b, 0);
+    if (trend.length && trend[trend.length - 1][0] === x.snapshot_date) trend[trend.length - 1][1] = v;
+    else trend.push([x.snapshot_date, v]);
+  }
+  const hasCost = (a, x) => a.type === "stock" && x != null && x.cost != null && x.cost > 0;
+  const gm = new Map(ASSET_GROUPS.map(g => [g, []]));
+  for (const a of accounts){ const x = latest.get(a.id) || null; gm.get(assetGroup(a, x ? x.balance : 0)).push({ a, s: x }); }
+  const groups = ASSET_GROUPS.filter(g => gm.get(g).length).map(name => {
+    const rows = gm.get(name).sort((p, q) => (q.s ? Math.abs(q.s.balance) : -1) - (p.s ? Math.abs(p.s.balance) : -1));
+    const priced = rows.filter(r => hasCost(r.a, r.s));
+    const cost = priced.reduce((t, r) => t + r.s.cost, 0);
+    return { name, rows, total: rows.reduce((t, r) => t + (r.s ? r.s.balance : 0), 0),
+             cost, pl: priced.reduce((t, r) => t + r.s.balance - r.s.cost, 0) };
+  });
+  const holdings = accounts.filter(a => a.type === "stock" && latest.has(a.id))
+    .map(a => ({ a, s: latest.get(a.id) })).sort((p, q) => q.s.balance - p.s.balance);
+  const withCost = holdings.filter(h => hasCost(h.a, h.s));
+  const mv = withCost.reduce((t, h) => t + h.s.balance, 0), cost = withCost.reduce((t, h) => t + h.s.cost, 0);
+  const am = new Map();
+  for (const a of accounts){ const x = latest.get(a.id); if (x && x.balance > 0){ const g = assetGroup(a, x.balance); am.set(g, (am.get(g) || 0) + x.balance); } }
+  return { accounts, snapshots: snaps, latest, assets, debts, net: assets + debts, trend, groups, holdings,
+           invest: withCost.length ? { mv, cost, pl: mv - cost, pct: (mv - cost) * 100 / cost } : null,
+           alloc: [...am].sort((p, q) => q[1] - p[1]) };
+}
 
 const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxAction, tripMemberState, tripSummary,
+  tripDistanceDays, tripsByRelevance,
   categoryOptions, daysApart, amtMatchTransfer, normalizeMerchant, merchantCore, statCategory, incomeCategory,
   classify, sortCategoryRules, matchFilterRule, statSource, classifyF, ruleExcludeState, effExclude,
   effExcludeF, incExcludeF, txOwnerId, assetOwnerId, accountDisplay, autoExclusions, buildIncome,
   categoryTotals, monthlyTrend, detectSubscriptions, labelOf, isInvestSell, ymAdd, Period, analyze,
+  friendlyReason, kindLabel, compactNt, ntD, signedPct, plLabel, parseAmount, parseBalance,
+  findCategory, newCategory, overBudget, dueSoon, detailView, monthCsv, txExclusionFilter, incomeExclusionFilter,
+  newestFirst, addDays, nickOf,
+  assetGroup, forMember, portfolio, ASSET_GROUPS,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;
