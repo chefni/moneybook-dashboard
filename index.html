@@ -43,10 +43,10 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=2fe75c5f40"></script>
-<script defer src="engine.js?v=e785c608c9"></script>
+<script defer src="engine.js?v=269a99fd5a"></script>
 <script defer src="detail.js?v=9b3c6b220b"></script>
 <script defer src="accounts.js?v=1740c4eeca"></script>
-<script defer src="me.js?v=9102cc971a"></script>
+<script defer src="me.js?v=7dd9c9e9f5"></script>
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
@@ -522,7 +522,9 @@ function buildChips(){
     box.appendChild(b);
   };
   mk("👨‍👩‍👧 合併", null);
-  for (const m of S.members) mk(m.nickname || m.name || "成員", m.id);
+  // 「這是我」那位排在合併之後第一個（各人看到的都是自己在前）；其餘照名冊順序。只動這排按鈕，不改名冊的 sort_order
+  const mine = m => (uid && m.user_id === uid ? 0 : 1);
+  for (const m of [...S.members].sort((a, b) => mine(a) - mine(b))) mk(m.nickname || m.name || "成員", m.id);
 }
 
 /** 一個摺疊區塊；body 是函式＝收合時不組裝（同 App：收著就不畫） */
@@ -943,7 +945,8 @@ function field(label, input){ return add(el("label", "fld"), el("span", null, la
 /** 錯誤翻成白話。資料庫的錯（帶 code 的那種）原文是英文 SQL 訊息，不給使用者看：認得的翻成白話，
  *  其餘一律通用說法、細節只進 console。本頁自己丟的錯誤（沒有 code）本來就是白話，照原樣。 */
 const DB_ERRORS = new Map([
-  ["23505", "已有同名的帳戶，請換個名字"],   // unique：本頁會撞到的只有 asset_accounts(household_id, name)
+  // unique：帳戶、成員、分類、帳單來源都可能撞到，這裡只能講通用的；認得情境的地方（me.js 的 explain）會換成更準的話
+  ["23505", "已經有同名的了，請換個名字"],
   ["23503", "這筆還被其他紀錄引用（例如合併進來的重複交易指向它），不能刪除；可改用「🚫 不納入收支」"],   // 外鍵
   // 資料庫還沒更新到這個功能要的版本（找不到函式／表／欄位）：功能優雅降級，講清楚原因，不丟英文
   ...["PGRST202", "42883", "42P01", "42703", "PGRST204"].map(c => [c, "這個功能需要先更新資料庫（伺服器上還沒有對應的設定），請告訴管理家計簿的人"])
@@ -1413,6 +1416,7 @@ async function watchSync(id){
   if (st === "done"){ await refreshData(); await showLastSync("✅ 同步完成，畫面已更新　"); }
   else if (st === "failed") $("syncMsg").textContent = "❌ 這次撈取失敗了；資料沒有遺失，下次同步會重撈同一段時間";
   else $("syncMsg").textContent = "⚠️ 同步逾時（超過 30 分鐘），請稍後再試";
+  if (st !== "done" && tab === "me") paintMe();   // 我的頁的同步鈕跟著恢復可按（done 時 refreshData 已重畫）
 }
 async function startSync(){
   if (syncing) return;

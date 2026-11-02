@@ -554,6 +554,13 @@ test("splitSources：啟用／發現／本機隱藏／永久忽略 四堆互不�
   eq([r.active, r.discovered, r.hiddenLocal, r.ignored].map(l => l.map(s => s.id)), [["a"], ["d1"], ["d2"], ["ig"]]);
   eq(E.splitSources([x("d", false)]).discovered.length, 1, "沒給 hidden＝都不隱藏");
 });
+test("hideHash：16 碼十六進位、同字串同結果、不含信箱字樣", () => {
+  const k = "m@example.com|bank.com", h = E.hideHash(k);
+  eq(/^[0-9a-f]{16}$/.test(h), true, "格式");
+  eq(E.hideHash(k), h, "穩定");
+  eq(E.hideHash("m@example.com|bank2.com") !== h, true, "不同來源不同鍵");
+  eq(/[@|]/.test(h), false, "讀取時靠「有沒有 @ 或 |」分辨舊明文，雜湊本身不能有");
+});
 test("ruleSearch：分類規則比商家或分類名、排除規則比樣式、不分大小寫、空白＝全部", () => {
   const labels = [{ key: "🛒 網購", label: "🛒 線上購物" }];
   const cr = [rule("shopee", "🛒 網購"), rule("麥當勞", "🍜 飲食")], ex = [xr("netflix", "exclude"), xr("公司代墊", "exclude")];

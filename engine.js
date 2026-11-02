@@ -775,6 +775,18 @@ function mailboxFor(name, mailAccounts, sources){
 /** 帳單來源分四堆（MainActivity.kt :3130-3205）：sort_order＝-1 是「永久忽略」（ignore_bank_source）；
  *  active=false 的是同步時探索掃描發現、還沒設定的；hidden(列) 為真＝只在這台裝置暫時隱藏 */
 const sourceKey = x => `${x.mailbox}|${x.from_contains}`;
+/** 「暫時隱藏」清單存在瀏覽器裡的鍵：sourceKey 的雜湊（16 碼十六進位），共用電腦上不會一眼看到家人信箱。
+ *  要同步算得出來（隱藏判斷在畫面迴圈裡），所以用 cyrb53 式的混雜而不是 crypto.subtle——是遮蔽，不是加密 */
+function hideHash(str){
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++){
+    const c = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
 function splitSources(list, hidden = () => false){
   const pending = list.filter(x => !x.active && (x.sort_order ?? 0) >= 0);
   return { active: list.filter(x => x.active),
@@ -801,7 +813,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   findCategory, newCategory, overBudget, dueSoon, detailView, monthCsv, txExclusionFilter, incomeExclusionFilter,
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
-  normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, splitSources, ruleSearch,
+  normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;

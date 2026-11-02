@@ -75,7 +75,11 @@ Object.assign(LiveStore, {
   mailboxes: () => sb.from("mail_accounts").select("gmail,member_name").eq("household_id", hid).then(must),
   saveMail: (gmail, password, memberName) => sb.rpc("set_mail_account",
     { hid, p_gmail: gmail, p_member_name: memberName, p_app_password: password }).then(must),
-  removeMail: () => sb.rpc("remove_mail_account", { hid }).then(must),
+  // 下面兩支 RPC 回 void、刪到 0 列也不報錯：先確認還在，不然「家人剛在 App 刪掉」時這裡會說成功
+  async removeMail(){
+    if (!(await LiveStore.myMail())) throw new Error("你的信箱連結已經不在了（可能在 App 解除過）；關掉這個視窗、重新整理頁面就會看到最新狀態");
+    must(await sb.rpc("remove_mail_account", { hid }));
+  },
 
   // ── 帳單來源：讀清單不含密碼；secret_id（Vault 的參照，不是密碼）讀到就轉成「有沒有設」，不留原值 ──
   sources: () => sb.from("bank_sources")
@@ -85,7 +89,11 @@ Object.assign(LiveStore, {
   /** 新增（id 空）或更新；password 空字串＝密碼不變（RPC 的約定） */
   setSource: x => sb.rpc("set_bank_source", { hid, p_id: x.id || null, p_parser: x.parser, p_name: x.name, p_kind: x.kind,
     p_from: x.from, p_subject: x.subject, p_member: x.member, p_mailbox: x.mailbox, p_pdf_password: x.password }).then(must),
-  deleteSource: id => sb.rpc("delete_bank_source", { hid, p_id: id }).then(must),
+  async deleteSource(id){
+    if (!must(await sb.from("bank_sources").select("id").eq("id", id)).length)
+      throw new Error("這個來源已經不在了（可能家人剛刪掉）；關掉這個視窗、重新整理頁面就會看到最新清單");
+    must(await sb.rpc("delete_bank_source", { hid, p_id: id }));
+  },
   ignoreSource: id => sb.rpc("ignore_bank_source", { hid, p_id: id }).then(must),
 
   // ── 自動撈取設定（ingest_settings：一個家庭一列）──
@@ -265,7 +273,7 @@ function setMeDialog(m){
   add(f.body, el("p", null, "設定後，你用「＋ 記一筆」記的帳預設算他的；原本連到你的成員會改回未連結。"),
     other ? el("p", "warn", `「${m.name}」目前連結的是另一個登入帳號（應該是另一位家人）。改成你之後，那位家人記帳的預設歸屬會跑掉——確定是你才按。`) : null);
   f.save.addEventListener("click", async () => {
-    if (await f.submit(() => Store.setMemberAsMe(m.id))){ f.d.close(); toast(`已設「${m.name}」為你（記帳預設歸他）`); refreshData(); }
+    if (await f.submit(() => Store.setMemberAsMe(m.id))){ f.d.close(); toast(`已設「${m.name}」為你（記帳預設算這位，成員按鈕也排到最前面）`); refreshData(); }
   });
 }
 /** 新增（m＝null）或編輯成員：名字必填（App 清空名字時靜默不存，這裡擋下並說明） */
@@ -311,7 +319,14 @@ function syncCard(){
       c.appendChild(d);
     }
   });
-  const b = btn("🔄 立即同步", () => { startSync(); toast("已送出，進度顯示在畫面最上方"); }, "");
+  // 結果（已送出／剛同步過／已有一次在跑）由 startSync 寫在頁首，這裡不另外說「已送出」——講的可能跟頁首相反
+  const b = btn("🔄 立即同步", async () => {
+    if (syncing) return;
+    b.disabled = true;
+    toast("進度與結果顯示在畫面最上方");
+    await startSync();
+    if (tab === "me") paintMe();   // 開始同步了＝按鈕要變灰；沒開始（太頻繁、送出失敗）＝恢復可按
+  }, "");
   b.disabled = DEMO || syncing;
   add(c, b, el("p", "note", DEMO ? "示範模式不連線，無法同步。" : "撈取信箱帳單／通知並更新資料，大約 1–3 分鐘；離開這頁也會繼續。"));
   return c;
@@ -325,7 +340,8 @@ function labelsBody(b){
     // App 一開這頁就自動寫入；這裡改成按了才寫，看設定頁不該改到資料
     add(b, el("p", "muted", "分類清單還是空的（明細、分析目前用內建清單）。建立後才能改名、設預算。"),
       btn("建立內建分類清單", () => confirmWrite("建立內建分類清單？", [`會寫入 ${E.AI_CATS.length} 個內建分類（${E.AI_CATS.slice(0, 3).join("、")}…），之後可改名、設預算。`],
-        "建立", () => Store.seedLabels(E.AI_CATS)), ""));
+        // 撞 23505＝App（或另一台）剛好同時建好了：當作完成，重抓就看得到
+        "建立", () => Store.seedLabels(E.AI_CATS).catch(e => { if (!e || e.code !== "23505") throw e; })), ""));
     return;
   }
   for (const l of labels){
@@ -480,7 +496,8 @@ function mailDialog(m){
   gmail.type = "email"; gmail.autocomplete = "off"; gmail.placeholder = "你的 Gmail 地址";
   gmail.value = m ? m.gmail : "";
   const me = S.members.find(x => uid != null && x.user_id === uid);
-  name.value = m ? m.member_name : me ? E.nickOf(me) : "";
+  // 預設用名冊的「名字」不用暱稱：新增帳單來源選成員時是拿名字比對這一欄來自動帶信箱（engine mailboxFor）
+  name.value = m ? m.member_name : me ? me.name : "";
   name.maxLength = 30;
   add(f.body, field("Gmail 地址", gmail), field(m ? "應用程式密碼（16 個字母，要重填）" : "應用程式密碼（16 個字母）", pw),
     field("我的稱呼（如：媽）", name),
@@ -496,13 +513,18 @@ function mailDialog(m){
 }
 
 /* ── 📥 帳單來源 ── */
-// 「暫時隱藏」只記在這台瀏覽器（App 是記在那支手機）；讀寫失敗（私密瀏覽）就當沒隱藏
+// 「暫時隱藏」只記在這台瀏覽器（App 是記在那支手機）；讀寫失敗（私密瀏覽）就當沒隱藏。
+// 存的是雜湊不是「信箱|網域」明文（共用電腦不留家人信箱）；早期存成明文的（含 @ 或 |）讀的時候換算，下次寫入就換掉
 const HIDE_KEY = "kakeibo.hiddenSources";
-function hiddenKeys(){ try { return new Set(JSON.parse(localStorage.getItem(HIDE_KEY) || "[]")); } catch (_){ return new Set(); } }
-const isHidden = x => hiddenKeys().has(E.sourceKey(x));
+function hiddenKeys(){
+  try { return new Set(JSON.parse(localStorage.getItem(HIDE_KEY) || "[]").map(k => (/[@|]/.test(k) ? E.hideHash(k) : k))); }
+  catch (_){ return new Set(); }
+}
+const hideKey = x => E.hideHash(E.sourceKey(x));
+const isHidden = x => hiddenKeys().has(hideKey(x));
 function setHidden(x, on){
   const s = hiddenKeys();
-  if (on) s.add(E.sourceKey(x)); else s.delete(E.sourceKey(x));
+  if (on) s.add(hideKey(x)); else s.delete(hideKey(x));
   try { localStorage.setItem(HIDE_KEY, JSON.stringify([...s])); }
   catch (_){ toast("這個瀏覽器記不住隱藏設定（可能是私密瀏覽）"); }
   repaint();
@@ -602,7 +624,8 @@ function sourceDialog(x){
   check();
   f.save.addEventListener("click", async () => {
     const ok = await f.submit(() => Store.setSource({ id: x && x.id, parser: parser.value, name: name.value.trim(), kind: kindOf(),
-      from: from.value.trim(), subject: subject.value, member: member.value, mailbox: mailbox.value.trim(), password: pw.value.trim() }));
+      from: from.value.trim(), subject: subject.value, member: member.value, mailbox: mailbox.value.trim(), password: pw.value.trim() })
+      .catch(explain({ "23505": "已有同名、同收信信箱、同歸屬成員的帳單來源，請換個顯示名稱" })));
     if (ok){ pw.value = ""; f.d.close(); toast("✅ 已儲存，下次撈信生效"); refreshData(); }
   });
 }
@@ -733,16 +756,25 @@ function bindJoin(){
   code.addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) join(); });
 
   // 建立新家庭：收在摺疊裡＋確認（家人誤按會變成兩本分開的帳）。中途失敗再按只補做沒完成的步驟，不會多建一本
-  const step = {};
-  $("btnCreateHouse").addEventListener("click", () => {
-    const name = $("newHouseName").value.trim();
+  let step = {};
+  const create = $("btnCreateHouse");
+  create.addEventListener("click", () => {
+    let name = $("newHouseName").value.trim();
     if (!name){ $("createMsg").textContent = "請先取個家庭名稱"; return; }
     $("createMsg").textContent = "";
-    confirmWrite(`建立「${name}」？`, ["會建立一本全新的空帳本，你是第一位成員；之後在「👤 我的」頁拿邀請碼給家人加入。",
+    // 上次失敗後改了名字：還沒成為成員＝重新來過（舊那列沒有成員、沒人看得到，不會混進誰的帳）；
+    // 已經是成員了就不能再開一本，沿用原本的名字只補做剩下的步驟（網頁與 App 都沒有改家名的功能）
+    if (step.name && step.name !== name){
+      if (step.member) name = step.name; else step = {};
+    }
+    step.name = name;
+    create.disabled = true;   // 確認框開著時不能再開第二個（兩個一起按確認會同時跑同一組步驟）
+    const f = confirmWrite(`建立「${name}」？`, ["會建立一本全新的空帳本，你是第一位成員；之後在「👤 我的」頁拿邀請碼給家人加入。",
       el("p", "warn", "家人已經在用家計簿的話，請按取消、改用邀請碼加入。")], "建立",
     () => Store.createHousehold(name, step).catch(e => {
-      if (step.member) throw new Error(`帳本已建立，但預設分類沒建好（${plainError(e)}）；再按一次「建立」只會補做這一步`);
+      if (step.member) throw new Error(`帳本「${name}」已建立，但預設分類沒建好（${plainError(e)}）；再按一次「建立」只會補做這一步`);
       throw e;
     }), () => location.reload());
+    f.d.addEventListener("close", () => { create.disabled = false; });
   });
 }
