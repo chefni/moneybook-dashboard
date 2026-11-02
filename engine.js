@@ -722,6 +722,75 @@ function portfolio(accounts, snapshots){
            alloc: [...am].sort((p, q) => q[1] - p[1]) };
 }
 
+/* ═══════════ 「👤 我的」頁（第四階段；App MainActivity.kt SettingsScreen 一帶） ═══════════ */
+/** 邀請碼正規化：碼是 8 個小寫十六進位字（v59 rotate_invite_code 的 md5 片段）。
+ *  家人常從訊息複製、手機會自動大寫開頭或夾空白——全部空白拿掉、轉小寫再送（App 只 trim）。 */
+const normInviteCode = v => s(v).replace(/\s+/g, "").toLowerCase();
+/** Gmail 應用程式密碼：Google 顯示成「abcd efgh ijkl mnop」，貼上會帶空白；真正的密碼是 16 個字母（App 只去頭尾）。 */
+const appPassword = v => s(v).replace(/\s+/g, "");
+/** 整數欄位：只收純數字且在 [lo, hi]，否則 null（自動撈取的天數、提醒日、優先序…） */
+const intIn = (v, lo, hi) => { const t = s(v).trim(); return /^\d{1,9}$/.test(t) && +t >= lo && +t <= hi ? +t : null; };
+
+/** 篩選器一行摘要（MainActivity.kt filterRuleSummary :2751）：條件 → 動作 */
+function filterRuleSummary(r, labels = []){
+  const cond = [];
+  if (!isBlank(r.kw)) cond.push(`含「${r.kw}」`);
+  if (!isBlank(r.account)) cond.push(`帳戶「${r.account}」`);
+  if (r.amount_min != null || r.amount_max != null) cond.push(`金額 ${r.amount_min ?? "?"}~${r.amount_max ?? "?"}`);
+  if ((r.direction || "any") !== "any") cond.push(r.direction === "income" ? "收入" : "支出");
+  const a = s(r.action);
+  const act = a.startsWith("cat:") ? `→ 分類「${labelOf(a.slice(4), labels)}」`
+            : a === "exclude" ? "→ 不納入收支" : a === "include" ? "→ 納入收支" : `→ ${a}`;
+  return `${cond.join("、") || "所有交易"} ${act}`;
+}
+
+/** 已支援解析的機構（MainActivity.kt PARSER_DEFS :3092）：選了自動帶入寄件網域／主旨／類型。新機構需先由開發者加解析器。 */
+const PARSER_DEFS = [
+  ["cathay_cc", "國泰世華信用卡", "credit_card", "cathaybk.com.tw", "信用卡"],
+  ["sinopac_cc", "永豐信用卡", "credit_card", "banksinopac.com.tw", "信用卡"],
+  ["taishin_cc", "台新信用卡", "credit_card", "taishinbank.com.tw", "信用卡"],
+  ["esun_cc", "玉山信用卡", "credit_card", "esunbank.com", "信用卡"],
+  ["fubon_cc", "富邦信用卡", "credit_card", "taipeifubon.com.tw", "信用卡"],
+  ["first_bank", "第一銀行", "bank", "firstbank.com.tw", "對帳單"],
+  ["yuanta_bank", "元大銀行", "bank", "yuantabank.tw", "對帳單"],
+  ["hsbc", "HSBC 滙豐", "bank", "hsbc.com.tw", "對帳單"],
+  ["sinopac_sec", "永豐金證券", "bank", "sinotrade.com.tw", "對帳單"],
+  ["sinopac_bank", "永豐銀行(綜合對帳單)", "bank", "banksinopac.com.tw", "綜合對帳單"],
+  ["ctbc_cc", "中國信託信用卡", "credit_card", "estats.ctbcbank.com", "電子帳單"]
+].map(([id, label, kind, from, subject]) => ({ id, label, kind, from, subject }));
+const parserDef = id => PARSER_DEFS.find(d => d.id === id) || null;
+
+/** 成員 → 收信信箱的最佳猜測（MainActivity.kt mailboxFor :3120）：先看家人的信箱連結，
+ *  再看這位成員既有帳單來源最常用的信箱。猜不到回 null。 */
+function mailboxFor(name, mailAccounts, sources){
+  const m = mailAccounts.find(a => a.member_name === name && s(a.gmail).includes("@"));
+  if (m) return m.gmail;
+  const n = new Map();
+  for (const x of sources) if (x.member_hint === name && s(x.mailbox).includes("@")) n.set(x.mailbox, (n.get(x.mailbox) || 0) + 1);
+  let best = null;
+  for (const [k, c] of n) if (best == null || c > n.get(best)) best = k;   // 同票取先出現的（Kotlin maxByOrNull 同）
+  return best;
+}
+
+/** 帳單來源分四堆（MainActivity.kt :3130-3205）：sort_order＝-1 是「永久忽略」（ignore_bank_source）；
+ *  active=false 的是同步時探索掃描發現、還沒設定的；hidden(列) 為真＝只在這台裝置暫時隱藏 */
+const sourceKey = x => `${x.mailbox}|${x.from_contains}`;
+function splitSources(list, hidden = () => false){
+  const pending = list.filter(x => !x.active && (x.sort_order ?? 0) >= 0);
+  return { active: list.filter(x => x.active),
+           discovered: pending.filter(x => !hidden(x)),
+           hiddenLocal: pending.filter(x => hidden(x)),
+           ignored: list.filter(x => (x.sort_order ?? 0) < 0) };
+}
+
+/** 已學習規則的搜尋（MainActivity.kt :2548-2550）：分類規則比商家或分類名稱，排除規則比樣式；不分大小寫 */
+function ruleSearch(catRules, excludeRules, q, labels = []){
+  const qq = s(q).trim().toLowerCase();
+  if (!qq) return { cat: catRules, exc: excludeRules };
+  return { cat: catRules.filter(r => lc(r.merchant).includes(qq) || lc(labelOf(r.category, labels)).includes(qq)),
+           exc: excludeRules.filter(r => lc(r.pattern).includes(qq)) };
+}
+
 const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxAction, tripMemberState, tripSummary,
   tripDistanceDays, tripsByRelevance,
   categoryOptions, daysApart, amtMatchTransfer, normalizeMerchant, merchantCore, statCategory, incomeCategory,
@@ -732,6 +801,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   findCategory, newCategory, overBudget, dueSoon, detailView, monthCsv, txExclusionFilter, incomeExclusionFilter,
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
+  normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, splitSources, ruleSearch,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;

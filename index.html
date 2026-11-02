@@ -13,13 +13,19 @@
        App Rules.kt 的逐條移植（engine.test.js 守著），不再是舊儀表板的「簡化子集」。
      2026-11-01 第三階段：底部分頁「💼 帳戶／🧾 明細／📊 分析」＋「＋ 記一筆」。
        本檔只留骨架、分頁切換、分析頁與共用小工具；明細＋編輯＋記一筆在 detail.js，帳戶在 accounts.js。
+     2026-11-02 第四階段：第 4 個分頁「👤 我的」（家庭與邀請碼、成員、記帳規則、帳單來源、撈取／AI 設定）＋
+       沒加入家庭的帳號可直接輸入邀請碼加入——都在 me.js。至此網頁可完全取代 App。
      設計要點：
      1. 無寫死家庭識別碼：登入後查 household_members 取 household_id；非成員只顯示提示。
      2. 安全靠 RLS；publishable key 出現在原始碼是官方設計。
      3. 寫入（全部受 RLS 限家庭成員）：立即同步（sync_requests）、「非訂閱」（RPC set_subscription_ignore）、
         改分類（RPC set_category_rule）、行程（trips 新增/刪除）、行程單筆例外（trip_tx）；
         第三階段加：交易（新增手記、編輯、刪除／剔除、疑似重複確認、不納入）、排除規則（RPC set_exclude_rule）、
-        手記分類（categories 新增）、帳戶（新增、改名）、餘額（RPC set_manual_snapshot）。
+        手記分類（categories 新增）、帳戶（新增、改名）、餘額（RPC set_manual_snapshot）；
+        第四階段加：成員（members 增改刪、「這是我」）、邀請碼（RPC rotate_invite_code）、加入／建立家庭（RPC join_household、
+        households＋household_members 首筆＋RPC seed_categories）、分類清單與預算（category_labels）、規則刪除（category_rules／
+        exclude_rules／subscription_ignores）、篩選器（filter_rules）、繳費提醒（bill_reminders）、撈取設定（ingest_settings）、
+        信箱／帳單來源／AI 金鑰（RPC，祕密進 Vault、前端只寫不讀）。
      4. XSS：DB 字串一律 textContent，全檔不用 innerHTML。
      5. ?demo=1：不連 Supabase，載入 demo.js 的合成資料渲染（部署前預覽用；資料皆虛構）。
      部署見 DEPLOY.md（白名單腳本 deploy.ps1）。⚠️ private\ 內含真實資料，絕不可部署。
@@ -35,11 +41,12 @@
         integrity="sha384-b0GXujLkk9eYYSmcSfoyZbfyElGAQnDyY0skCHSG6w3JgTMFnz11ggrTAr7seu9f"
         crossorigin="anonymous"></script>
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
-     detail.js／accounts.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
+     detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=2fe75c5f40"></script>
-<script defer src="engine.js?v=7b9486e3cf"></script>
+<script defer src="engine.js?v=e785c608c9"></script>
 <script defer src="detail.js?v=9b3c6b220b"></script>
 <script defer src="accounts.js?v=1740c4eeca"></script>
+<script defer src="me.js?v=9102cc971a"></script>
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
@@ -224,6 +231,27 @@
   .stats b { display:block; font-size:16px; }
   .spend { display:block; width:100%; text-align:left; border:none; margin-bottom:10px; }
   .vh { margin:18px 0 6px; font-size:16px; }
+
+  /* ── 👤 我的（第四階段，me.js）── */
+  #meView > .card { margin-top:10px; }
+  #meView h2 { font-size:20px; margin-bottom:6px; overflow-wrap:anywhere; }
+  #meView h3 { font-size:16px; margin:2px 0 4px; }
+  .code { font-family:ui-monospace,Consolas,monospace; font-size:24px; font-weight:700; letter-spacing:2px; color:var(--accent-ink);
+          user-select:all; -webkit-user-select:all; }   /* 複製不了時一按就全選，方便長按複製 */
+  .setrow { display:flex; align-items:center; gap:4px; padding:6px 0; min-height:48px; border-bottom:1px dashed var(--line); font-size:14px; }
+  .setrow .m { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .setrow .m > span:first-child { overflow-wrap:anywhere; }
+  .setrow small { color:var(--sub); font-size:12px; overflow-wrap:anywhere; }
+  .setrow.off .m > span:first-child { color:var(--sub); }
+  .errbox { background:var(--warn-bg); color:var(--red); border-radius:10px; padding:8px 12px; margin-top:8px; font-size:13px; }
+  .errbox pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; margin-top:4px; color:var(--ink); }
+  .rowx > .fld { flex:1; min-width:110px; }   /* 對話框裡並排的兩個欄位（金額 ≥／≤、每 N 單位） */
+  .chk { display:flex; align-items:center; gap:10px; min-height:40px; font-size:14px; color:var(--ink); }
+  .chk input { width:20px; height:20px; padding:0; }
+  .join { display:grid; gap:8px; margin:14px 0 6px; text-align:left; }
+  .join input { min-height:44px; font-size:18px; text-align:center; letter-spacing:2px; }
+  .center details { text-align:left; margin-top:16px; border-top:1px solid var(--line); padding-top:8px; }
+  .center details > summary { cursor:pointer; min-height:40px; padding:8px 0; color:var(--accent-ink); }
   footer { margin:18px 0 8px; color:var(--sub); font-size:12px; }
   @media (max-width:420px) {
     body { padding-top:max(12px, env(safe-area-inset-top)); padding-left:max(12px, env(safe-area-inset-left));
@@ -251,10 +279,24 @@
 <div id="nomember" class="center" hidden>
   <div class="card">
     <h1 style="margin-bottom:12px">🏠 家計簿</h1>
-    <p>此帳號不是家庭成員，請先在手機 App 用邀請碼加入。</p>
-    <p class="muted" style="margin:10px 0 18px">加入後按「重新檢查」即可。</p>
-    <button class="primary" id="btnRecheck">重新檢查</button>
+    <p>這個帳號還沒加入家庭帳本。</p>
+    <p class="muted" style="margin-top:6px">請向家人要 8 碼的邀請碼（在對方家計簿的「👤 我的」頁）。</p>
+    <!-- 加入／建立的程式在 me.js（bindJoin） -->
+    <div class="join">
+      <label class="fld"><span>邀請碼</span>
+        <input id="joinCode" maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 1a2b3c4d"></label>
+      <button class="primary" id="btnJoin">加入</button>
+      <p class="err" id="joinMsg" role="alert" style="margin-top:0"></p>
+    </div>
+    <button id="btnRecheck">重新檢查</button>
     <button id="btnSignOut2">登出</button>
+    <details>
+      <summary>還沒有家庭帳本？建立一本新的</summary>
+      <p class="muted" style="margin:4px 0 8px">家人已經在用的話，請改用上面的邀請碼加入；建立新的會變成另一本分開的帳。</p>
+      <label class="fld"><span>家庭名稱</span><input id="newHouseName" maxlength="30" placeholder="例如：小明家"></label>
+      <button id="btnCreateHouse" style="margin-top:8px">建立新的家庭帳本</button>
+      <p class="err" id="createMsg" role="alert"></p>
+    </details>
   </div>
 </div>
 
@@ -299,6 +341,7 @@
   <main>
     <div id="accountsView" hidden></div>   <!-- accounts.js -->
     <div id="detailView" hidden></div>     <!-- detail.js -->
+    <div id="meView" hidden></div>         <!-- me.js -->
     <div id="sections"></div>              <!-- 分析頁（本檔） -->
   </main>
   <footer>
@@ -312,6 +355,7 @@
     <button data-tab="accounts"><span aria-hidden="true">💼</span>帳戶</button>
     <button data-tab="detail"><span aria-hidden="true">🧾</span>明細</button>
     <button data-tab="analysis"><span aria-hidden="true">📊</span>分析</button>
+    <button data-tab="me"><span aria-hidden="true">👤</span>我的</button>
   </nav>
 </div>
 
@@ -338,7 +382,7 @@ let sb = null, hid = null;
 let uid = null;              // 登入者的 auth id：記一筆的 member_id／created_by，也用來預設「算誰的」
 let sel = null;              // 成員篩選：null＝全家合併（三個分頁共用）
 let period = null;           // 明細與分析共用
-let tab = "analysis";        // 底部分頁：accounts／detail／analysis
+let tab = "analysis";        // 底部分頁：accounts／detail／analysis／me
 const S = {                  // 不隨期間變的設定類資料
   members: [], accounts: [], catRules: [], labels: [], excludeRules: [], filterRules: [], cats: [], reminders: [],
   subIgnores: new Set()
@@ -430,6 +474,7 @@ async function render(quiet){
   const my = ++renderSeq, p = period;
   // 帳戶頁不看期間：自己管載入（第一次切過去才抓，accounts.js）
   if (tab === "accounts"){ showView("app"); paintAccounts(); return; }
+  if (tab === "me"){ showView("app"); paintMe(); return; }        // 我的頁同理（me.js）
   // 畫面已經在（有舊資料，或先開的是帳戶頁）就不整頁換成「讀取中」
   const onScreen = () => lastData || !$("app").hidden;
   try {
@@ -525,6 +570,7 @@ let lastData = null, lastPeriod = null;
 function repaint(){
   try {
     if (tab === "accounts") paintAccounts();
+    else if (tab === "me") paintMe();
     else if (lastData) paint(lastData, lastPeriod);
   } catch (e){ console.error(e); $("netMsg").textContent = "⚠️ 畫面繪製失敗：" + (e && e.message ? e.message : e); $("netMsg").hidden = false; }
 }
@@ -898,11 +944,16 @@ function field(label, input){ return add(el("label", "fld"), el("span", null, la
  *  其餘一律通用說法、細節只進 console。本頁自己丟的錯誤（沒有 code）本來就是白話，照原樣。 */
 const DB_ERRORS = new Map([
   ["23505", "已有同名的帳戶，請換個名字"],   // unique：本頁會撞到的只有 asset_accounts(household_id, name)
-  ["23503", "這筆還被其他紀錄引用（例如合併進來的重複交易指向它），不能刪除；可改用「🚫 不納入收支」"]   // 外鍵
+  ["23503", "這筆還被其他紀錄引用（例如合併進來的重複交易指向它），不能刪除；可改用「🚫 不納入收支」"],   // 外鍵
+  // 資料庫還沒更新到這個功能要的版本（找不到函式／表／欄位）：功能優雅降級，講清楚原因，不丟英文
+  ...["PGRST202", "42883", "42P01", "42703", "PGRST204"].map(c => [c, "這個功能需要先更新資料庫（伺服器上還沒有對應的設定），請告訴管理家計簿的人"])
 ]);
+const HAS_CJK = /[\u3400-\u9fff]/;   // 有漢字＝中文訊息
 function plainError(e){
   const m = e && e.message ? e.message : String(e);
   if (navigator.onLine === false || /failed to fetch|networkerror|load failed/i.test(m)) return "連不上伺服器，請確認網路後再試一次";
+  // RPC／觸發器自己 raise 的中文訊息（例：「邀請碼輸入錯誤太多次，請一小時後再試」）本來就是寫給人看的白話：照講
+  if (e && e.code === "P0001" && HAS_CJK.test(m)) return m;
   if (e && e.code){
     if (DB_ERRORS.has(e.code)) return DB_ERRORS.get(e.code);
     console.warn("資料庫錯誤", e.code, e.message, e.details, e.hint);
@@ -1200,6 +1251,7 @@ function bindNav(){
   });
   $("btnRetry").addEventListener("click", () => location.reload());
   $("btnRecheck").addEventListener("click", () => location.reload());
+  bindJoin();   // 沒加入家庭的畫面：輸入邀請碼加入／建立新家庭（me.js）
   if (window.matchMedia)
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaint);
   for (const b of $("tabbar").children) b.addEventListener("click", () => setTab(b.dataset.tab));
@@ -1208,10 +1260,10 @@ function bindNav(){
 }
 function thisMonth(){ const d = new Date(); return E.Period.month(d.getFullYear(), d.getMonth() + 1); }
 
-/* ═══════════ 底部分頁（💼 帳戶／🧾 明細／📊 分析） ═══════════ */
+/* ═══════════ 底部分頁（💼 帳戶／🧾 明細／📊 分析／👤 我的） ═══════════ */
 // 分頁記在網址 hash，重新整理還在同一頁；也記在 localStorage，下次打開回到上次的分頁。
 // 切分頁用 replaceState：返回鍵不在分頁之間來回跳（同手機 App 的底部分頁），只有「帳戶明細」這種下一層才 pushState。
-const TABS = ["accounts", "detail", "analysis"];
+const TABS = ["accounts", "detail", "analysis", "me"];
 const TAB_KEY = "kakeibo.tab";
 const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : null);
 function initialTab(){
@@ -1224,7 +1276,9 @@ function applyTab(){
   $("accountsView").hidden = tab !== "accounts";
   $("detailView").hidden = tab !== "detail";
   $("sections").hidden = tab !== "analysis";
-  $("periodBox").hidden = tab === "accounts";
+  $("meView").hidden = tab !== "me";
+  $("periodBox").hidden = tab === "accounts" || tab === "me";
+  $("chips").hidden = tab === "me";   // 我的頁是全家共用的設定，不分成員（同 App）
   for (const b of $("tabbar").children) b.setAttribute("aria-current", b.dataset.tab === tab ? "page" : "false");
 }
 /** 切分頁；帶 p 時順便換期間（例如帳戶頁「本月支出」→ 明細的本月） */
@@ -1288,7 +1342,7 @@ async function doRefresh(){
       // 先取標記再抓資料：抓的途中有新資料進來，標記就會不同，下一分鐘自然再抓一次（反過來會把沒抓到的標成看過）
       const mark = DEMO ? null : await dataMark();
       tripDirty = true;                 // 行程跟著重抓（開著才會真的載入；重抓中保留舊畫面）
-      detailStale(); accountsStale();   // 明細的逾期通知、帳戶頁的快照同理：開著那頁才重抓
+      detailStale(); accountsStale(); meStale();   // 明細的逾期通知、帳戶頁的快照、我的頁的設定同理：開著那頁才重抓
       if (!DEMO){ await loadStatic(); periodCache.clear(); }
       buildChips();
       await render(true);
@@ -1378,7 +1432,9 @@ async function startSync(){
       if (p && p.length) watchSync(p[0].id);
       return;
     }
-    $("syncMsg").textContent = m.includes("過於頻繁") ? "⏳ 剛剛才同步過，請等約一分鐘再按" : "❌ 送出失敗，請確認網路後再試";
+    // 其他中文訊息是資料庫自己講的白話（例：v94 之後新建的家庭「這個家庭尚未啟用雲端撈取」）：照講，不要誤導成網路問題
+    $("syncMsg").textContent = m.includes("過於頻繁") ? "⏳ 剛剛才同步過，請等約一分鐘再按"
+      : HAS_CJK.test(m) ? "❌ " + m : "❌ 送出失敗，請確認網路後再試";
     return;
   }
   watchSync(data.id);
@@ -1465,7 +1521,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=992693ef43";
+    d.src = "demo.js?v=ee0f06ff2c";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);

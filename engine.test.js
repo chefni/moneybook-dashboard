@@ -516,5 +516,52 @@ test("portfolio：最新快照、資產負債淨值、趨勢沿用前值、沒�
   eq(E.portfolio([], []).invest, null);
 });
 
+/* ── 「👤 我的」頁（第四階段） ── */
+test("normInviteCode：去掉所有空白（含中間、全形空白）並轉小寫；appPassword 去空白", () => {
+  eq(E.normInviteCode("  AB12 cd34\n"), "ab12cd34"); eq(E.normInviteCode("ab12　CD34"), "ab12cd34");
+  eq(E.normInviteCode(null), ""); eq(E.normInviteCode("   "), "");
+  eq(E.appPassword(" abcd efgh ijkl mnop "), "abcdefghijklmnop"); eq(E.appPassword("abcdefghijklmnop").length, 16);
+});
+test("intIn：純數字且在區間內才收", () => {
+  eq(E.intIn("28", 1, 28), 28); eq(E.intIn(" 1 ", 1, 28), 1); eq(E.intIn("0", 1, 28), null); eq(E.intIn("29", 1, 28), null);
+  eq(E.intIn("1.5", 1, 28), null); eq(E.intIn("-3", 1, 28), null); eq(E.intIn("", 1, 28), null); eq(E.intIn("0", 0, 999), 0);
+});
+test("filterRuleSummary：條件依序列出、沒條件＝所有交易、三種動作（同 App filterRuleSummary）", () => {
+  const labels = [{ key: "🍜 飲食", label: "🍜 吃飯" }];
+  eq(E.filterRuleSummary(filter("cat:🍜 飲食", { kw: "麥當勞", account: "示範卡", amount_min: 100, direction: "expense" }), labels),
+     "含「麥當勞」、帳戶「示範卡」、金額 100~?、支出 → 分類「🍜 吃飯」");
+  eq(E.filterRuleSummary(filter("exclude", { amount_max: 50, direction: "income" })), "金額 ?~50、收入 → 不納入收支");
+  eq(E.filterRuleSummary(filter("include")), "所有交易 → 納入收支");
+  eq(E.filterRuleSummary(filter("cat:未知鍵")), "所有交易 → 分類「未知鍵」", "找不到標籤就顯示 key");
+});
+test("PARSER_DEFS／parserDef：11 家、欄位齊全、id 不重複", () => {
+  eq(E.PARSER_DEFS.length, 11); eq(new Set(E.PARSER_DEFS.map(d => d.id)).size, 11);
+  ok(E.PARSER_DEFS.every(d => d.label && d.from && d.subject && (d.kind === "bank" || d.kind === "credit_card")));
+  eq(E.parserDef("esun_cc").from, "esunbank.com"); eq(E.parserDef("nope"), null); eq(E.parserDef(""), null);
+});
+test("mailboxFor：先看家人信箱連結，再看該成員帳單來源最常用的信箱（同票取先出現）", () => {
+  const mails = [{ member_name: "阿華", gmail: "hua@example.com" }, { member_name: "阿明", gmail: "壞的" }];
+  const src = (member_hint, mailbox) => ({ member_hint, mailbox });
+  eq(E.mailboxFor("阿華", mails, [src("阿華", "other@example.com")]), "hua@example.com");
+  eq(E.mailboxFor("阿明", mails, [src("阿明", "b@example.com"), src("阿明", "a@example.com"), src("阿明", "a@example.com")]), "a@example.com");
+  eq(E.mailboxFor("阿明", [], [src("阿明", "x@example.com"), src("阿明", "y@example.com")]), "x@example.com");
+  eq(E.mailboxFor("阿明", [], [src("阿明", "沒有小老鼠")]), null); eq(E.mailboxFor("無名", mails, []), null);
+});
+test("splitSources：啟用／發現／本機隱藏／永久忽略 四堆互不重疊", () => {
+  const x = (id, active, sort_order = 0) => ({ id, active, sort_order, mailbox: "m@example.com", from_contains: id + ".com" });
+  const list = [x("a", true), x("d1", false), x("d2", false), x("ig", false, -1)];
+  const r = E.splitSources(list, s => E.sourceKey(s) === "m@example.com|d2.com");
+  eq([r.active, r.discovered, r.hiddenLocal, r.ignored].map(l => l.map(s => s.id)), [["a"], ["d1"], ["d2"], ["ig"]]);
+  eq(E.splitSources([x("d", false)]).discovered.length, 1, "沒給 hidden＝都不隱藏");
+});
+test("ruleSearch：分類規則比商家或分類名、排除規則比樣式、不分大小寫、空白＝全部", () => {
+  const labels = [{ key: "🛒 網購", label: "🛒 線上購物" }];
+  const cr = [rule("shopee", "🛒 網購"), rule("麥當勞", "🍜 飲食")], ex = [xr("netflix", "exclude"), xr("公司代墊", "exclude")];
+  eq(E.ruleSearch(cr, ex, "  ").cat.length, 2);
+  eq(E.ruleSearch(cr, ex, "線上", labels).cat.map(r => r.merchant), ["shopee"], "比對顯示名稱");
+  eq(E.ruleSearch(cr, ex, "SHOP", labels).cat.map(r => r.merchant), ["shopee"]);
+  eq(E.ruleSearch(cr, ex, "NetFlix").exc.map(r => r.pattern), ["netflix"]);
+});
+
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);
