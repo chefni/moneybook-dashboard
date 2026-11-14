@@ -46,8 +46,8 @@ function buildDetailFrame(){
   DV.top = el("div");
   DV.search = el("input");
   DV.search.type = "search";
-  DV.search.placeholder = "🔍 搜尋（跨月、全家）";
-  DV.search.setAttribute("aria-label", "搜尋商家或備註（跨月、全家）");
+  DV.search.placeholder = "🔍 搜尋商家或金額（跨月、全家）";
+  DV.search.setAttribute("aria-label", "搜尋商家、備註或金額（跨月、全家；金額可打 4620 或 1000-2000）");
   DV.search.addEventListener("input", () => { DV.q = DV.search.value; runSearch(); });
   DV.exportBtn = el("button", null, "⬇ 匯出");
   DV.exportBtn.title = "把本期（目前成員）的明細存成 CSV";

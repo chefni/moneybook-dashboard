@@ -554,6 +554,15 @@ test("splitSources：啟用／發現／本機隱藏／永久忽略 四堆互不�
   eq([r.active, r.discovered, r.hiddenLocal, r.ignored].map(l => l.map(s => s.id)), [["a"], ["d1"], ["d2"], ["ig"]]);
   eq(E.splitSources([x("d", false)]).discovered.length, 1, "沒給 hidden＝都不隱藏");
 });
+test("amountQuery：單一金額／區間／不是金額", () => {
+  eq(E.amountQuery("4620"), { min: 4620, max: 4620 });
+  eq(E.amountQuery(" NT$ 4,620 "), { min: 4620, max: 4620 }, "去 NT$、逗號、空白");
+  eq(E.amountQuery("4620元"), { min: 4620, max: 4620 });
+  eq(E.amountQuery("1000-2000"), { min: 1000, max: 2000 });
+  eq(E.amountQuery("2000～1000"), { min: 1000, max: 2000 }, "全形波浪、前後顛倒");
+  eq(E.amountQuery("麥當勞"), null); eq(E.amountQuery("7-11a"), null); eq(E.amountQuery(""), null);
+  eq(E.amountQuery("1234567890"), null, "超過 9 位數不當金額");
+});
 test("hideHash：16 碼十六進位、同字串同結果、不含信箱字樣", () => {
   const k = "m@example.com|bank.com", h = E.hideHash(k);
   eq(/^[0-9a-f]{16}$/.test(h), true, "格式");

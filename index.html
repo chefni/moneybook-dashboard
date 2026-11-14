@@ -43,8 +43,8 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=2fe75c5f40"></script>
-<script defer src="engine.js?v=269a99fd5a"></script>
-<script defer src="detail.js?v=9b3c6b220b"></script>
+<script defer src="engine.js?v=122febacf0"></script>
+<script defer src="detail.js?v=04662129a9"></script>
 <script defer src="accounts.js?v=1740c4eeca"></script>
 <script defer src="me.js?v=7dd9c9e9f5"></script>
 <style>
@@ -1138,9 +1138,14 @@ const LiveStore = {
       .order("occurred_at", { ascending: false })) : Promise.resolve([])),
   search(q){
     const s = q.replace(/[,()*%"\\]/g, "").trim();   // PostgREST or() 的語法字元一律拿掉
-    if (!s) return Promise.resolve([]);   // 全是符號：拿掉後變成空字串＝「全部都符合」，不能照查
+    // 打的是金額（4620、4,620、1000-2000）：也找這個金額／區間的交易。商家名照樣比對——「7-11」看起來像區間，
+    // 其實是超商。amountQuery 只會給整數，直接放進查詢字串是安全的
+    const amt = E.amountQuery(q), conds = [];
+    if (amt) conds.push(amt.min !== amt.max ? `and(amount.gte.${amt.min},amount.lte.${amt.max})` : `amount.eq.${amt.min}`);
+    if (s) conds.push(`merchant.ilike.*${s}*`, `note.ilike.*${s}*`);
+    if (!conds.length) return Promise.resolve([]);   // 全是符號：拿掉後變成空字串＝「全部都符合」，不能照查
     return sb.from("transactions").select("*").eq("household_id", hid).neq("dedup_status", "merged")
-      .or(`merchant.ilike.*${s}*,note.ilike.*${s}*`).order("occurred_at", { ascending: false }).limit(300).then(must);
+      .or(conds.join(",")).order("occurred_at", { ascending: false }).limit(300).then(must);
   },
   addTrip: (name, s, e) => sb.from("trips").insert({ household_id: hid, name, start_date: s, end_date: e, note: "" }).then(must),
   deleteTrip: id => affected(sb.from("trips").delete().eq("id", id)),
@@ -1525,7 +1530,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=ee0f06ff2c";
+    d.src = "demo.js?v=e4cd144a9c";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);

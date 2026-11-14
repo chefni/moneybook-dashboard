@@ -546,6 +546,15 @@ const plLabel = (pl, pct) => `${pl >= 0 ? "▲" : "▼"} ${ntD(Math.abs(pl))}（
 
 /** 金額欄（§6-8）：只收 1～9 位數字且 > 0；其餘回 null（App 沒上限，超過 Int 會閃退、0 也收）。 */
 const parseAmount = v => { const t = s(v).trim(); return /^\d{1,9}$/.test(t) && +t > 0 ? +t : null; };
+/** 明細搜尋框打的是不是金額：「4620」「4,620」「NT$4620」「4620元」＝剛好這個金額；
+ *  「1000-2000」「1000~2000」＝這個區間（含兩端，前後顛倒也行）。不是金額回 null */
+function amountQuery(q){
+  const t = s(q).replace(/nt\$|\$|元|[,，\s]/gi, "");
+  let m = t.match(/^(\d{1,9})$/);
+  if (m) return { min: +m[1], max: +m[1] };
+  m = t.match(/^(\d{1,9})[-~～－](\d{1,9})$/);
+  return m ? { min: Math.min(+m[1], +m[2]), max: Math.max(+m[1], +m[2]) } : null;
+}
 /** 餘額欄（負數＝負債；可帶小數——對帳單匯入的餘額有小數，預填回去要能原樣存）；空白或看不懂回 null。 */
 const parseBalance = v => { const t = s(v).trim(); return /^-?\d{1,13}(\.\d{1,4})?$/.test(t) ? +t : null; };
 
@@ -809,7 +818,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   classify, sortCategoryRules, matchFilterRule, statSource, classifyF, ruleExcludeState, effExclude,
   effExcludeF, incExcludeF, txOwnerId, assetOwnerId, accountDisplay, autoExclusions, buildIncome,
   categoryTotals, monthlyTrend, detectSubscriptions, labelOf, isInvestSell, ymAdd, Period, analyze,
-  friendlyReason, kindLabel, compactNt, ntD, signedPct, plLabel, parseAmount, parseBalance,
+  friendlyReason, kindLabel, compactNt, ntD, signedPct, plLabel, parseAmount, amountQuery, parseBalance,
   findCategory, newCategory, overBudget, dueSoon, detailView, monthCsv, txExclusionFilter, incomeExclusionFilter,
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,

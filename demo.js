@@ -16,8 +16,12 @@ const DemoStore = {
   txAll: async (a, b) => DEMO_DATA.txs.filter(t => t.dedup_status !== "merged" && t.occurred_at >= a && t.occurred_at < b),
   txByIds: async ids => DEMO_DATA.txs.filter(t => ids.includes(t.id)),
   acct: async (a, b) => DEMO_DATA.acct.filter(t => t.occurred_at >= a && t.occurred_at < b),
-  search: async q => DEMO_DATA.txs.filter(t => t.dedup_status !== "merged" &&
-    (t.merchant + t.note).toLowerCase().includes(q.toLowerCase())).sort(newestFirst()),
+  search: async q => {   // 規則同 LiveStore.search：金額／區間，商家名照樣比對
+    const amt = E.amountQuery(q);
+    return DEMO_DATA.txs.filter(t => t.dedup_status !== "merged" &&
+      ((amt && t.amount >= amt.min && t.amount <= amt.max) ||
+       (t.merchant + t.note).toLowerCase().includes(q.toLowerCase()))).sort(newestFirst());
+  },
   addTrip: async (name, s, e) => { DEMO_DATA.trips.push({ id: "trip" + Date.now(), name, start_date: s, end_date: e }); },
   deleteTrip: async id => { DEMO_DATA.trips = DEMO_DATA.trips.filter(t => t.id !== id); },
   setTripTx: async (trip_id, transaction_id, action) => {
