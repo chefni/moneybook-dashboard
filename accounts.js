@@ -67,9 +67,13 @@ function paintAccountList(root){
       : "尚無資產資料（按上方「🔄 立即同步」匯入銀行對帳單，或在下方手動新增帳戶）"));
   } else {
     const pf = E.portfolio(accounts, snaps);
-    add(root, netWorthCard(pf), el("p", "note", "點分組展開帳戶明細"));
+    // 使用者要求（2026-11-14）：淨值趨勢放最上面、淨資產卡移到原本趨勢圖的位置（頁尾）
+    root.appendChild(el("h3", "vh", "淨值趨勢"));
+    trendChart(root, pf.trend, "淨值趨勢折線圖");
+    root.appendChild(el("p", "note", "點分組展開帳戶明細"));
     for (const g of pf.groups) groupRows(root, g);
     investSection(root, pf);
+    add(root, el("h3", "vh", "淨資產"), netWorthCard(pf));
   }
   const addBtn = el("button", null, "➕ 手動新增帳戶");
   addBtn.addEventListener("click", addAccountDialog);
@@ -129,9 +133,9 @@ function groupRows(root, g){
   }
 }
 
-/** 📈 投資理財（App InvestSection）：總覽、持股明細、資產配置、淨值趨勢 */
+/** 📈 投資理財（App InvestSection）：總覽、持股明細、資產配置（淨值趨勢已移到頁首） */
 function investSection(root, pf){
-  if (!pf.accounts.some(a => a.type === "stock") && pf.trend.length < 2) return;
+  if (!pf.accounts.some(a => a.type === "stock")) return;
   root.appendChild(el("h3", "vh", "📈 投資理財"));
   const iv = pf.invest;
   if (!iv) add(root, el("b", null, "投資總覽"), el("p", "muted", pf.holdings.length ? "尚無成本資料（需重灌含成本的快照）" : "無證券持倉"));
@@ -165,8 +169,6 @@ function investSection(root, pf){
     if (window.Chart) chartBox(root, "資產配置圓環圖（數值見下方）", cv => donut(cv, pf.alloc, total));
     for (const [g, v] of pf.alloc) root.appendChild(row2(`${g}　${Math.round(v * 100 / total)}%`, E.ntD(v)));
   } else root.appendChild(el("p", "muted", "沒有正餘額的帳戶"));
-  root.appendChild(el("h3", "vh", "淨值趨勢"));
-  trendChart(root, pf.trend, "淨值趨勢折線圖");
 }
 
 /* ═══════════ 帳戶明細 ═══════════ */

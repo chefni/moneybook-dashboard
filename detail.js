@@ -46,8 +46,8 @@ function buildDetailFrame(){
   DV.top = el("div");
   DV.search = el("input");
   DV.search.type = "search";
-  DV.search.placeholder = "🔍 搜尋商家或金額（跨月、全家）";
-  DV.search.setAttribute("aria-label", "搜尋商家、備註或金額（跨月、全家；金額可打 4620 或 1000-2000）");
+  DV.search.placeholder = "🔍 搜尋商家或金額（跨月）";
+  DV.search.setAttribute("aria-label", "搜尋商家、備註或金額（跨月；依上方選的成員，合併＝全家；金額可打 4620 或 1000-2000）");
   DV.search.addEventListener("input", () => { DV.q = DV.search.value; runSearch(); });
   DV.exportBtn = el("button", null, "⬇ 匯出");
   DV.exportBtn.title = "把本期（目前成員）的明細存成 CSV";
@@ -283,9 +283,15 @@ function drawSearch(b){
   const q = DV.q.trim();
   if (DV.searchErr){ b.appendChild(el("p", "warn", DV.searchErr)); return; }
   if (!DV.found){ b.appendChild(el("p", "muted", "搜尋中…")); return; }
-  if (!DV.found.length){ b.appendChild(el("p", "muted", `找不到符合「${q}」的交易`)); return; }
-  b.appendChild(el("p", "note", `找到 ${DV.found.length} 筆（最多 300）· 點單筆可編輯、改分類`));
-  for (const t of DV.found){
+  // 上方選了某位成員＝只列他的（歸屬規則同明細／分析頁）；選「合併」＝全家。切換成員不必重查，畫面重畫時就重篩
+  const who = sel == null ? null : S.members.find(m => m.id === sel);
+  const list = who ? DV.found.filter(t => E.txOwnerId(t, S.members) === sel) : DV.found;
+  const scope = who ? `${E.nickOf(who)}的` : "";
+  if (!list.length){ b.appendChild(el("p", "muted", `找不到${scope}符合「${q}」的交易`)); return; }
+  // 伺服器先回全家最新 300 筆再篩成員：剛好 300 筆時，更早的那些沒查到，要講
+  b.appendChild(el("p", "note", `找到${scope} ${list.length} 筆` +
+    (DV.found.length >= 300 ? (who ? "（從全家最新 300 筆中篩出，更早的可能沒列到）" : "（只列最新 300 筆）") : "") + " · 點單筆可編輯、改分類"));
+  for (const t of list){
     const owner = ownerName(t);
     const row = el("button", "main");
     add(row, add(el("span", "m"), el("span", null, title(t)),

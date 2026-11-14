@@ -44,8 +44,8 @@
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=2fe75c5f40"></script>
 <script defer src="engine.js?v=122febacf0"></script>
-<script defer src="detail.js?v=04662129a9"></script>
-<script defer src="accounts.js?v=1740c4eeca"></script>
+<script defer src="detail.js?v=24cd54b72e"></script>
+<script defer src="accounts.js?v=4226eb1004"></script>
 <script defer src="me.js?v=7dd9c9e9f5"></script>
 <style>
   :root {
@@ -1269,16 +1269,12 @@ function bindNav(){
 function thisMonth(){ const d = new Date(); return E.Period.month(d.getFullYear(), d.getMonth() + 1); }
 
 /* ═══════════ 底部分頁（💼 帳戶／🧾 明細／📊 分析／👤 我的） ═══════════ */
-// 分頁記在網址 hash，重新整理還在同一頁；也記在 localStorage，下次打開回到上次的分頁。
+// 分頁記在網址 hash，重新整理還在同一頁；重新打開一律從「帳戶」開始（不記上次的分頁）。
 // 切分頁用 replaceState：返回鍵不在分頁之間來回跳（同手機 App 的底部分頁），只有「帳戶明細」這種下一層才 pushState。
 const TABS = ["accounts", "detail", "analysis", "me"];
-const TAB_KEY = "kakeibo.tab";
 const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : null);
-function initialTab(){
-  let saved = null;
-  try { saved = localStorage.getItem(TAB_KEY); } catch (_){ /* 私密瀏覽等讀不到：用預設 */ }
-  return tabFromHash() || (TABS.includes(saved) ? saved : "analysis");   // 預設＝分析（原本的首頁）
-}
+/** 打開家計簿一律先到「帳戶」（使用者要求，2026-11-14）；重新整理時網址還帶著 #分頁，就留在原頁 */
+function initialTab(){ return tabFromHash() || "accounts"; }
 /** 依目前分頁顯示對應區塊與期間列、標出分頁列上的目前項 */
 function applyTab(){
   $("accountsView").hidden = tab !== "accounts";
@@ -1300,7 +1296,6 @@ function setTab(t, p){
     return;
   }
   tab = t;
-  try { localStorage.setItem(TAB_KEY, t); } catch (_){ /* 記不住就算了 */ }
   history.replaceState(null, "", "#" + t);
   applyTab();
   window.scrollTo(0, 0);
