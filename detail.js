@@ -221,17 +221,18 @@ function drawBank(b, v){
   if (!bank.rows.length){ b.appendChild(el("p", "muted", "本期無存款帳戶交易（永豐綜合對帳單／玉山每日帳務）")); return; }
   b.appendChild(el("p", "note", `存入 ${nt(bank.inSum)}｜轉出/扣款 ${nt(bank.outSum)}　共 ${bank.rows.length} 筆` +
     "（灰字＝不計入收支，多為帳戶互轉、卡費扣繳、股票款）"));
-  for (const { a, ex, why, account, rule, spend, pending } of bank.rows){
+  for (const { a, ex, why, account, rule, spend, use, pending } of bank.rows){
     const row = el("button", "main");
     const sub = el("small");
     if (ex && why) sub.appendChild(el("span", "tag", E.friendlyReason(why)));
     if (spend) sub.appendChild(el("span", "tag", "算成 " + E.useLabel(spend.forcedCat, S.labels)));
+    else if (use === "skip") sub.appendChild(el("span", "tag", E.useLabel(use, S.labels)));
     if (pending) sub.appendChild(el("span", "tag warn", "待分用途"));
     sub.appendChild(document.createTextNode(`${a.occurred_at} · ${account}`));
     add(row, add(el("span", "m"), el("span", null, a.description || "（無摘要）"), sub),
         add(el("span", "a"), el("span", ex ? "dim" : a.amount < 0 ? "expense" : "income", (a.amount < 0 ? "−" : "＋") + nt(Math.abs(a.amount))),
             a.balance != null ? el("small", null, "餘 " + Math.round(a.balance).toLocaleString("en-US")) : null));
-    row.addEventListener("click", () => (spend || pending
+    row.addEventListener("click", () => (use != null || pending
       ? purposeDialog(a, S.accounts.find(x => x.id === a.account_id))
       : excludeDialog({ kind: "acct", id: a.id, state: a.exclude_state, pattern: a.description,
                         excluded: ex, label: a.description || "（無摘要）", blocked: ruleBlocked(rule) })));
@@ -249,9 +250,11 @@ function drawExcluded(b, v){
     b.appendChild(excludedRow(title(t, tag), `${t.occurred_at} · ${E.statSource(t)}`, -t.amount, tag, "編輯", () => editTx(t)));
   for (const { t, why, rule } of x.exp){
     const label = title(t, "支出");
-    b.appendChild(excludedRow(label, `${t.occurred_at} · ${E.statSource(t)}`, -t.amount, why, "納入",
-      () => excludeDialog({ kind: "tx", id: t.id, state: t.exclude_state, pattern: title(t, ""), excluded: true, label,
-                            blocked: ruleBlocked(rule, t) })));
+    // 存款轉出（與銀行帳單重複而不算）沒有交易表那一列：開它的用途對話框
+    b.appendChild(excludedRow(label, `${t.occurred_at} · ${E.statSource(t)}`, -t.amount, why, t.fromAcct ? "用途" : "納入",
+      () => (t.fromAcct ? purposeDialog(t.raw, S.accounts.find(a => a.id === t.raw.account_id))
+        : excludeDialog({ kind: "tx", id: t.id, state: t.exclude_state, pattern: title(t, ""), excluded: true, label,
+                          blocked: ruleBlocked(rule, t) }))));
   }
   for (const { i, why, rule } of x.inc)
     b.appendChild(excludedRow(i.desc, `${i.date} · ${i.source}`, i.amount, why, "納入",
@@ -310,7 +313,11 @@ function drawSearch(b){
 /** 匯出本期（目前成員）的列成 CSV：含疑似重複（狀態欄註明），分類欄與畫面一致（classifyF） */
 function exportCsv(){
   const v = DV.v;
-  const csv = E.monthCsv(v.txs, S, t => { const [ex, why] = v.txExc(t); return ex ? E.friendlyReason(why) : ""; });
+  // 存款轉出算成的支出也匯出（狀態欄註明）；它們不走商家排除規則，排除原因用明細頁算好的那個
+  const spendRow = new Map(v.spendRows.map(r => [r.t, r]));
+  const csv = E.monthCsv(v.txs.concat([...spendRow.keys()]), S, t => {
+    const [ex, why] = spendRow.has(t) ? [spendRow.get(t).ex, spendRow.get(t).why] : v.txExc(t);
+    return ex ? E.friendlyReason(why) : ""; });
   const name = `moneybook_${E.Period.fileTag(lastPeriod)}.csv`, blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   // iPhone 加到主畫面的 App 模式裡 <a download> 常常沒反應：那裡改叫系統分享（可存到檔案、傳 LINE…）
   const file = typeof File === "function" ? new File([blob], name, { type: blob.type }) : null;

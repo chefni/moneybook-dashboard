@@ -674,6 +674,31 @@ test("analyze 回傳 ratios 與待分用途（只算本期、跟成員篩選）"
   eq([r.ratios.base, r.ratios.fixed, r.ratios.pct.fixed, r.ratios.pending], [60000, 18000, 30, { n: 1, sum: 250 }]);
   eq(E.analyze(d, E.Period.month(2026, 2), "m1", "2026-02-20").ratios.pending.n, 0);
 });
+test("跨表去重：銀行（非信用卡）帳單同額 ±3 天記過的不再算；信用卡同額不算重複；明細標出來、CSV 也匯出", () => {
+  const bank = tx("b1", 18000, "2026-02-11", "expense", "貸款扣款", "email", { note: "[email] 安泰商業銀行" });
+  const card = tx("c1", 700, "2026-02-10", "expense", "全聯", "email", { note: "[email] 玉山信用卡" });
+  const rows = [out("n1", -18000, "房貸", { purpose: "🏡 房貸信貸" }), out("n2", -700, "家用", { purpose: "🍜 飲食" }, "H")];
+  const r = spendOf(rows);
+  eq(E.acctSpends(rows, [useAcct, homeAcct], [me, her], [], new Map(), [bank, card]).dup.map(t => t.acctId), ["n1"]);
+  eq(E.acctSpends(rows, [useAcct, homeAcct], [me, her], [], new Map(), [{ ...bank, exclude_state: "exclude" }]).dup.length, 0,
+     "銀行那筆被手動排除＝這筆照算");
+  eq(r.dup.length, 0);
+  const d = { ...spendFixture(rows), txs: [bank, card], txsAll: [bank, card], range6: [bank, card] };
+  const a = E.analyze(d, E.Period.month(2026, 2), null, "2026-02-20");
+  eq(a.te, 18000 + 700 + 700, "房貸只算銀行那筆；刷卡 700 與家用 700 各算");
+  const v = E.detailView(d, E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.te, a.te, "明細與分析同額");
+  const n1 = v.bank.rows.find(x => x.a.id === "n1");
+  eq([n1.ex, n1.why, n1.use], [true, "與對帳單重複", "🏡 房貸信貸"]);
+  eq(v.excluded.exp.map(x => x.t.id), ["a:n1"], "已排除清單看得到");
+  const csv = E.monthCsv(v.txs.concat(v.spendRows.map(x => x.t)), d);
+  ok(csv.includes("存款轉出（依用途）") && csv.split("\n").length === 1 + 4 + 1, "CSV 含 2 筆存款轉出");
+});
+test("明細銀行列：設成不計的轉出帶 use=skip（點下去開用途對話框改得回來）", () => {
+  const v = E.detailView(spendFixture([out("s", -500, "轉帳", { purpose: "skip" }), out("z", -90, "轉帳")]),
+    E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.bank.rows.map(x => [x.a.id, x.use]).sort(), [["s", "skip"], ["z", null]]);
+});
 test("用途規則：useRuleRow 產生的規則自己能命中同一筆；尾碼；摘要與標籤", () => {
   const a = out("x", -18000, "預約轉帳 房貸", {}, "A"), acc = { id: "A", name: "玉山(阿明)·活存 0123456" };
   const row = { ...E.useRuleRow(a, acc, "🏡 房貸信貸"), active: true };

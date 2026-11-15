@@ -50,6 +50,7 @@ const DemoStore = {
 
   snapshots: async ids => DEMO_DATA.snaps.filter(x => ids.includes(x.account_id)),
   acctTxns: async id => DEMO_DATA.acct.filter(a => a.account_id === id).sort(newestFirst()),
+  acctTxnsRange: async (from, to) => DEMO_DATA.acct.filter(a => a.occurred_at >= from && a.occurred_at < to).sort(newestFirst()),
   setSnapshot: async (account_id, balance, cost, snapshot_date) => {
     DEMO_DATA.snaps = DEMO_DATA.snaps.filter(x => !(x.account_id === account_id && x.snapshot_date === snapshot_date));
     DEMO_DATA.snaps.push({ id: "n" + Date.now(), account_id, balance, cost, snapshot_date, source: "manual" });
@@ -222,6 +223,9 @@ function buildDemo(){
     acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(11), amount: -6000, description: "手機轉帳 補習班", note: "", purpose: "📚 教育" });
     acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(18), amount: -2500, description: "手機轉帳", note: "" });
     acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(22), amount: -4000, description: "ATM 領現金", note: "" });
+    // 家用帳戶轉回自家另一個帳戶＝互轉，帳戶頁與分析頁都不該列成待分用途
+    acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(19), amount: -3000, description: "網銀轉出", note: "" });
+    acct.push({ id: "d" + (++n), account_id: "a1", occurred_at: day(19), amount: 3000, description: "轉入", note: "" });
     // 餘額快照：每月一次（本月＝今天，可試「今天已記過」的覆蓋確認）
     const sd = k === 0 ? E.todayIso() : day(28);
     const S_ = (account_id, balance, cost = null) => snaps.push({ id: "n" + (++n), account_id, balance, cost, snapshot_date: sd, source: "email" });

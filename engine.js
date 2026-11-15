@@ -333,20 +333,35 @@ const acctOutRow = (a, acc, members) => ({
   merchant: isBlank(a.description) ? "存款轉出" : a.description, note: s(a.note), occurred_at: a.occurred_at,
   source: accountDisplay(acc, members), family_member_id: assetOwnerId(acc, members),
   fromAcct: true, exclude_state: null, dedup_status: "unique" });
-/** 回傳 { counted: 算成消費的偽支出（帶 forcedCat）, pending: 家用帳戶還沒分用途的轉出 }；autoAcct 是 autoExclusions 的存款流水結果 */
-function acctSpends(acctTxns, accounts, members, filters, autoAcct = new Map()){
+/** 跨表重複：同一筆錢若銀行（非信用卡）帳單也記成支出，算成消費的存款轉出就不再算一次。
+ *  只比銀行來源——交易表大多是信用卡帳單，同額相近日期多半是另一筆真的消費，拿來去重會誤刪。 */
+const isBankExpense = t => t.kind === "expense" && !t.fromAcct && notMergedAux(t) && t.id != null &&
+  t.dedup_status === "unique" && t.exclude_state !== "exclude" && /銀行/.test(statSource(t)) && !/信用卡/.test(statSource(t));
+function markTxDupes(counted, txs){
+  const bankTx = txs.filter(isBankExpense), used = new Set(), dup = [];
+  const kept = counted.filter(r => {
+    const t = bankTx.find(t => !used.has(t.id) && t.amount === Math.trunc(r.amount) && daysApart(t.occurred_at, r.occurred_at) <= 3);
+    if (!t) return true;
+    used.add(t.id); dup.push(r); return false;
+  });
+  return [kept, dup];
+}
+/** 回傳 { counted: 算成消費的偽支出（帶 forcedCat）, pending: 家用帳戶還沒分用途的轉出, dup: 與銀行帳單重複而不算的 }；
+ *  autoAcct 是 autoExclusions 的存款流水結果；txs＝交易表（跨表去重用） */
+function acctSpends(acctTxns, accounts, members, filters, autoAcct = new Map(), txs = []){
   const byId = new Map(accounts.map(a => [a.id, a]));
-  const counted = [], pending = [];
+  const counted0 = [], pending = [];
   for (const a of acctTxns){
     const acc = byId.get(a.account_id);
     if (!(a.amount < 0) || !acc || a.exclude_state === "exclude") continue;   // ①
     const use = acctUseOf(a, acc, members, filters);
     if (use === "skip") continue;
-    if (use != null){ counted.push({ ...acctOutRow(a, acc, members), forcedCat: use }); continue; }
+    if (use != null){ counted0.push({ ...acctOutRow(a, acc, members), forcedCat: use }); continue; }
     if (isCardFeeText(a)) continue;   // ④ 刷卡時已記過
     if (acc.spend_account && !autoAcct.has(a.id)) pending.push(acctOutRow(a, acc, members));   // ⑤
   }
-  return { counted, pending };
+  const [counted, dup] = markTxDupes(counted0, txs);
+  return { counted, pending, dup };
 }
 
 /* ── 收入清單（MainActivity.kt buildIncome） ── */
@@ -480,7 +495,8 @@ function analyze(d, period, sel, today = todayIso()){
   const acctTxns = d.acctTxnsWide.filter(a => inP(a, mStart, mNext));
   const [autoTx, autoAcct] = autoExclusions(d.txs, d.acctTxnsWide, accounts, members, today);
   // 存款轉出依用途算成的支出：整個寬窗算一次，再分給本期／前期／近 6 月（同一個判定，三處不會各算各的）
-  const spends = acctSpends(d.acctTxnsWide, accounts, members, filterRules, autoAcct);
+  const txsWide = [...new Map([...d.range6, ...d.prevTxs, ...d.txs].map(t => [t.id, t])).values()];   // 跨表去重要看同一個寬窗
+  const spends = acctSpends(d.acctTxnsWide, accounts, members, filterRules, autoAcct, txsWide);
   const spendIn = (list, a, b) => mine(list.filter(x => inP(x, a, b)));
   const trend6 = monthlyTrend(mine(d.range6).concat(mine(spends.counted)), Period.anchorMonth(period));
   const txs = mine(d.txs);
@@ -694,10 +710,13 @@ function detailView(d, period, sel, today = todayIso()){
   const incExc = i => incExcludeF(i, i.kind === "tx" ? autoTx : autoAcct, excludeRules, filterRules);
   const txs = sel == null ? all : all.filter(t => txOwnerId(t, members) === sel);
   // 存款轉出依用途算成的支出（不走 txExc：它沒有帳單標記，商家排除規則／互轉判定都不該誤傷）
-  const spends = acctSpends(d.acctTxnsWide, accounts, members, filterRules, autoAcct);
-  const spendRows = (sel == null ? spends.counted : spends.counted.filter(t => txOwnerId(t, members) === sel))
+  // 跨表去重只看得到本期的交易（月初月底 3 天內的極端情況可能和分析頁差一筆）
+  const spends = acctSpends(d.acctTxnsWide, accounts, members, filterRules, autoAcct, all);
+  const dupIds = new Set(spends.dup.map(t => t.acctId));
+  const spendRows = spends.counted.concat(spends.dup).filter(t => sel == null || txOwnerId(t, members) === sel)
     .filter(t => t.occurred_at >= mStart && t.occurred_at < mNext)
-    .map(t => ({ t, date: t.occurred_at, ex: false, why: "", suspect: false, rule: null }));
+    .map(t => ({ t, date: t.occurred_at, ex: dupIds.has(t.acctId), why: dupIds.has(t.acctId) ? "與對帳單重複" : "",
+                 suspect: false, rule: null }));
 
   // 支出：列出全部（含疑似重複、已排除，灰字），只算「不重複且未排除」的
   const expRows = txs.filter(t => t.kind === "expense").map(t => {
@@ -737,9 +756,13 @@ function detailView(d, period, sel, today = todayIso()){
     const acc = acctById.get(a.account_id), dep = depositItem.get(a.id);
     const spend = spendOf.get(a.id) || null;
     const [ex0, why0] = dep ? incExc(dep) : effExclude(a.exclude_state, a.id, a.description, autoAcct, excludeRules);
+    // 轉出列的用途（含明確「不計」）：畫面據此決定點下去開用途對話框，設成不計的也改得回來
+    const use = a.amount < 0 && acc && a.exclude_state !== "exclude" ? acctUseOf(a, acc, members, filterRules) : null;
     // 有用途的轉出算成支出：就算被判成帳戶互轉，這裡也不再灰掉（轉入那側照舊不算收入）
-    return { a, date: a.occurred_at, ex: ex0 && !spend, why: spend ? "" : why0, account: acc ? accountDisplay(acc, members) : "存款帳戶",
-             spend, pending: pendingIds.has(a.id),
+    const dupe = dupIds.has(a.id);
+    return { a, date: a.occurred_at, ex: dupe || (ex0 && !spend), why: dupe ? "與對帳單重複" : spend ? "" : why0,
+             account: acc ? accountDisplay(acc, members) : "存款帳戶",
+             spend, use, pending: pendingIds.has(a.id),
              rule: dep ? incomeExclusionFilter(dep, filterRules) : null };   // 轉出列不經篩選器（同 App）
   }).sort(newest);
 
@@ -750,7 +773,7 @@ function detailView(d, period, sel, today = todayIso()){
   const exclExp = expRows.filter(r => r.ex && !r.suspect);
   const exclInc = incRows.filter(r => r.ex);
   return {
-    txs, te, byCat, expRows, groups, txExc,
+    txs, te, byCat, expRows, groups, txExc, spendRows,
     provisional: sum(exp.filter(t => t.source === "notification")),
     income: { rows: incRows, groups: incGroups, total: sum(incRows.filter(r => !r.ex), r => r.i.amount),
               pendingN: pending.length, pendingAmt: sum(pending, r => r.i.amount) },
@@ -770,12 +793,12 @@ function detailView(d, period, sel, today = todayIso()){
  *  文字欄開頭是 = + - @ 時前面補 '，Excel 才不會把商家名當公式執行。 */
 function monthCsv(txs, d, exclusionOf = () => ""){
   const esc = v => `"${s(v).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
-  const status = { suspect: "疑似重複", merged: "已合併" };
+  const status = t => (t.fromAcct ? "存款轉出（依用途）" : { suspect: "疑似重複", merged: "已合併" }[t.dedup_status] || "");
   const owner = t => { const m = d.members.find(m => m.id === txOwnerId(t, d.members)); return m ? m.name : ""; };
   const rows = txs.slice().sort(newestFirst())
     .map(t => [t.occurred_at, kindLabel(t.kind), t.amount].join(",") + "," +
       [isBlank(t.merchant) ? t.note : t.merchant, labelOf(classifyF(t, d.catRules, d.filterRules, d.cats), d.labels),
-       statSource(t), owner(t), status[t.dedup_status] || "", exclusionOf(t)].map(esc).join(","));
+       statSource(t), owner(t), status(t), exclusionOf(t)].map(esc).join(","));
   return "\uFEFF日期,類型,金額,商家/備註,分類,來源,成員,狀態,排除原因\n" + rows.map(r => r + "\n").join("");
 }
 
@@ -927,7 +950,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
   normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
-  isFixedCat, catBucket, useLabel, isCardFeeText, catBucketLabel, acctSpends, acctUseOf, acctRuleKey, useRuleRow, financeRatios, missingBuiltins,
+  INVEST_CAT, isFixedCat, catBucket, useLabel, isCardFeeText, catBucketLabel, acctSpends, acctUseOf, acctRuleKey, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;

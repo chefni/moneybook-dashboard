@@ -43,9 +43,9 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=ac99182faf"></script>
-<script defer src="detail.js?v=bb0e9d4043"></script>
-<script defer src="accounts.js?v=85e9d851ac"></script>
+<script defer src="engine.js?v=a0fd466588"></script>
+<script defer src="detail.js?v=6f3018d955"></script>
+<script defer src="accounts.js?v=488fbf35f2"></script>
 <script defer src="me.js?v=161ad3a480"></script>
 <style>
   :root {
@@ -1200,6 +1200,10 @@ const LiveStore = {
     .order("snapshot_date", { ascending: false })),
   acctTxns: id => pagedFetch(() => sb.from("account_transactions").select("*").eq("account_id", id)
     .order("occurred_at", { ascending: false })),
+  /** 全部帳戶在 [from, to) 的流水（帳戶頁判斷家用帳戶的轉出是不是自家互轉） */
+  acctTxnsRange: (from, to) => (S.accounts.length ? pagedFetch(() => sb.from("account_transactions").select("*")
+    .in("account_id", S.accounts.map(a => a.id)).gte("occurred_at", from).lt("occurred_at", to)
+    .order("occurred_at", { ascending: false })) : Promise.resolve([])),
   /** 同帳戶同一天只有一筆（upsert）；cost 傳 null＝沒有成本 */
   setSnapshot: (account, balance, cost, date) => sb.rpc("set_manual_snapshot",
     { p_account: account, p_balance: balance, p_cost: cost, p_date: date }).then(must),
@@ -1551,7 +1555,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=9c0a7f7cb5";
+    d.src = "demo.js?v=ae7af9eb33";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);
