@@ -42,11 +42,11 @@
         crossorigin="anonymous"></script>
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
-<script defer src="classify_data.js?v=2fe75c5f40"></script>
-<script defer src="engine.js?v=122febacf0"></script>
-<script defer src="detail.js?v=24cd54b72e"></script>
-<script defer src="accounts.js?v=4226eb1004"></script>
-<script defer src="me.js?v=7dd9c9e9f5"></script>
+<script defer src="classify_data.js?v=becb3e5804"></script>
+<script defer src="engine.js?v=ac99182faf"></script>
+<script defer src="detail.js?v=bb0e9d4043"></script>
+<script defer src="accounts.js?v=85e9d851ac"></script>
+<script defer src="me.js?v=161ad3a480"></script>
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
@@ -453,7 +453,7 @@ async function fetchPeriod(p){
   const P = E.Period, pv = P.prev(p), an = P.anchorMonth(p);
   const [y5, m5] = E.ymAdd(an.y, an.m, -5), [y1, m1] = E.ymAdd(an.y, an.m, 1);
   const ids = S.accounts.map(a => a.id);
-  const ws = addDays(P.startDate(p), -5), we = addDays(P.endExclusive(p), 5);
+  const [ws, we] = P.acctWindow(p);   // 存款流水涵蓋本期、前期、近 6 月（存款轉出算成的支出三處都要用）
   const [txsAll, prevTxs, range6, acctTxnsWide] = await Promise.all([
     // 本期抓一次「非 merged」（明細要看得到疑似重複）；分析頁要的 unique 從中取，不必再抓一次
     LiveStore.txAll(P.startDate(p), P.endExclusive(p)),
@@ -598,7 +598,7 @@ function paintAnalysis(d, p){
   const root = $("sections");
   root.replaceChildren();
   const mineN = sel == null ? d.txs.length : d.txs.filter(t => E.txOwnerId(t, S.members) === sel).length;
-  if (!mineN && !r.income.length){   // 同 App：依成員篩選後判斷
+  if (!mineN && !r.income.length && !r.exp.length){   // 同 App：依成員篩選後判斷
     root.appendChild(add(el("div", "card"), el("p", "muted", "本期尚無資料")));
     root.appendChild(tripFold());     // 旅遊跟期間無關，照樣可以看
     return;
@@ -638,6 +638,25 @@ function paintAnalysis(d, p){
         row("本期投資投入（買入）", nt(f.investIn)),
         f.investOut > 0 ? row("本期投資回收（賣出）", nt(f.investOut)) : null,
         row("投資率（投入/真實收入）", pct(f.investRate)), row("被動收入（利息+配息）", nt(f.passive)));
+    }));
+  }
+
+  // ── 📐 四個比例 ──
+  const rt = r.ratios;
+  if (rt.base > 0 || rt.pending.n){
+    const pct = v => (v == null ? "—" : `${v}%`);
+    root.appendChild(fold("ratio", "📐 四個比例（本期）",
+      rt.base > 0 ? `固定 ${pct(rt.pct.fixed)} · 自由 ${pct(rt.pct.free)} · 投資 ${pct(rt.pct.invest)} · 儲蓄 ${pct(rt.pct.saving)}` : "本期沒有真實收入，算不出比例", b => {
+      add(b, el("p", "note", `各占「真實收入」${nt(rt.base)} 的比例。固定／自由由分類決定（我的 → 消費分類可改）；存款轉出要先分用途才會算進來。`),
+        row("固定開銷", `${nt(rt.fixed)}（${pct(rt.pct.fixed)}）`), row("自由花費", `${nt(rt.free)}（${pct(rt.pct.free)}）`),
+        row("投資", `${nt(rt.invest)}（${pct(rt.pct.invest)}）`),
+        rt.saving >= 0 ? row("儲蓄", `${nt(rt.saving)}（${pct(rt.pct.saving)}）`, "income")
+                       : row("動用存款", nt(-rt.saving), "expense"));
+      if (rt.pending.n){
+        const go = el("button", "info", `家用帳戶還有 ${rt.pending.n} 筆轉出沒分用途（${nt(rt.pending.sum)}），點我去分`);
+        go.addEventListener("click", () => { DV.view = "bank"; setTab("detail"); });
+        b.appendChild(go);
+      }
     }));
   }
 
@@ -951,6 +970,7 @@ const DB_ERRORS = new Map([
   // 資料庫還沒更新到這個功能要的版本（找不到函式／表／欄位）：功能優雅降級，講清楚原因，不丟英文
   ...["PGRST202", "42883", "42P01", "42703", "PGRST204"].map(c => [c, "這個功能需要先更新資料庫（伺服器上還沒有對應的設定），請告訴管理家計簿的人"])
 ]);
+const V95_MISSING = /(purpose|fixed|spend_account)/;   // v95 新增的三個欄位名
 const HAS_CJK = /[\u3400-\u9fff]/;   // 有漢字＝中文訊息
 function plainError(e){
   const m = e && e.message ? e.message : String(e);
@@ -958,6 +978,8 @@ function plainError(e){
   // RPC／觸發器自己 raise 的中文訊息（例：「邀請碼輸入錯誤太多次，請一小時後再試」）本來就是寫給人看的白話：照講
   if (e && e.code === "P0001" && HAS_CJK.test(m)) return m;
   if (e && e.code){
+    // v95（轉帳用途）新增的欄位還不存在：跟其他「資料庫沒更新」不同，這個醫師自己跑一次 SQL 就好，講得具體些
+    if (V95_MISSING.test(m) && ["42703", "PGRST204"].includes(e.code)) return "請先執行 v95 資料庫更新（supabase/v95_transfer_purpose.sql）再使用這個功能";
     if (DB_ERRORS.has(e.code)) return DB_ERRORS.get(e.code);
     console.warn("資料庫錯誤", e.code, e.message, e.details, e.hint);
     return "伺服器回報錯誤，請稍後再試；一直失敗請告訴管理家計簿的人";
@@ -1181,6 +1203,10 @@ const LiveStore = {
   /** 同帳戶同一天只有一筆（upsert）；cost 傳 null＝沒有成本 */
   setSnapshot: (account, balance, cost, date) => sb.rpc("set_manual_snapshot",
     { p_account: account, p_balance: balance, p_cost: cost, p_date: date }).then(must),
+  /** 存款轉出的用途：null＝跟隨規則、'skip'＝不計、其餘＝分類 key（v95 的欄位；還沒跑 v95 時寫入會被 plainError 翻成白話） */
+  setPurpose: (id, purpose) => affected(sb.from("account_transactions").update({ purpose }).eq("id", id)),
+  /** 家用帳戶：這個帳戶的轉出要分用途（v95） */
+  setSpendAccount: (id, on) => affected(sb.from("asset_accounts").update({ spend_account: on }).eq("id", id)),
   renameAccount: (id, displayName) => affected(sb.from("asset_accounts").update({ display_name: displayName }).eq("id", id)),
   addAccount: (name, type, memberId) => sb.from("asset_accounts")
     .insert({ household_id: hid, name, type, member_id: memberId }).select().single().then(must)
@@ -1525,7 +1551,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=e4cd144a9c";
+    d.src = "demo.js?v=9c0a7f7cb5";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);

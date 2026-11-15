@@ -167,9 +167,10 @@ function expenseRow(r){
   const box = el("div", "li" + (ex ? " off" : ""));
   const main = el("button", "main");
   add(main, add(el("span", "m"), el("span", null, (suspect ? "⚠️ " : "") + title(t)),
-                el("small", null, `${t.occurred_at} · ${E.statSource(t)}` + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : ""))),
+                el("small", null, `${t.occurred_at} · ${E.statSource(t)}` + (t.fromAcct ? "（存款轉出）" : "") + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : ""))),
       el("span", "a" + (ex || suspect ? " dim" : t.kind === "expense" ? " expense" : " income"), (t.kind === "expense" ? "−" : "＋") + nt(t.amount)));
-  main.addEventListener("click", () => editTx(t, r));
+  // 存款轉出算成的支出沒有交易表那一列可編輯：點開改它的「用途」
+  main.addEventListener("click", () => (t.fromAcct ? purposeDialog(t.raw, S.accounts.find(a => a.id === t.raw.account_id)) : editTx(t, r)));
   box.appendChild(main);
   if (suspect){
     const yes = el("button", "link ok", "真的有這筆 ✓"), no = el("button", "link danger", "是重複的 ✕"), err = el("span", "warn");
@@ -220,16 +221,20 @@ function drawBank(b, v){
   if (!bank.rows.length){ b.appendChild(el("p", "muted", "本期無存款帳戶交易（永豐綜合對帳單／玉山每日帳務）")); return; }
   b.appendChild(el("p", "note", `存入 ${nt(bank.inSum)}｜轉出/扣款 ${nt(bank.outSum)}　共 ${bank.rows.length} 筆` +
     "（灰字＝不計入收支，多為帳戶互轉、卡費扣繳、股票款）"));
-  for (const { a, ex, why, account, rule } of bank.rows){
+  for (const { a, ex, why, account, rule, spend, pending } of bank.rows){
     const row = el("button", "main");
     const sub = el("small");
     if (ex && why) sub.appendChild(el("span", "tag", E.friendlyReason(why)));
+    if (spend) sub.appendChild(el("span", "tag", "算成 " + E.useLabel(spend.forcedCat, S.labels)));
+    if (pending) sub.appendChild(el("span", "tag warn", "待分用途"));
     sub.appendChild(document.createTextNode(`${a.occurred_at} · ${account}`));
     add(row, add(el("span", "m"), el("span", null, a.description || "（無摘要）"), sub),
         add(el("span", "a"), el("span", ex ? "dim" : a.amount < 0 ? "expense" : "income", (a.amount < 0 ? "−" : "＋") + nt(Math.abs(a.amount))),
             a.balance != null ? el("small", null, "餘 " + Math.round(a.balance).toLocaleString("en-US")) : null));
-    row.addEventListener("click", () => excludeDialog({ kind: "acct", id: a.id, state: a.exclude_state, pattern: a.description,
-                                                        excluded: ex, label: a.description || "（無摘要）", blocked: ruleBlocked(rule) }));
+    row.addEventListener("click", () => (spend || pending
+      ? purposeDialog(a, S.accounts.find(x => x.id === a.account_id))
+      : excludeDialog({ kind: "acct", id: a.id, state: a.exclude_state, pattern: a.description,
+                        excluded: ex, label: a.description || "（無摘要）", blocked: ruleBlocked(rule) })));
     b.appendChild(add(el("div", "li" + (ex ? " off" : "")), row));
   }
 }

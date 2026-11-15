@@ -579,5 +579,120 @@ test("ruleSearch：分類規則比商家或分類名、排除規則比樣式、�
   eq(E.ruleSearch(cr, ex, "NetFlix").exc.map(r => r.pattern), ["netflix"]);
 });
 
+/* ═══ 存款轉出的用途（v95）：優先序、use: 規則分流、偽支出進分析／明細、四個比例 ═══ */
+const useAcct = { ...accA, spend_account: false }, homeAcct = { id: "H", name: "家用(阿華)·活存", spend_account: true };
+const spendOf = (rows, o = {}) => E.acctSpends(rows, o.accounts || [useAcct, homeAcct], [me, her], o.filters || [], o.auto || new Map());
+const out = (id, amount, desc, extra = {}, account = "A", day = "2026-02-10") => ({ ...acct(id, account, amount, day, desc), ...extra });
+const spendFixture = rows => ({ members: [me, her], accounts: [useAcct, homeAcct], catRules: [], labels: [], excludeRules: [], filterRules: [],
+  cats: [], subIgnores: new Set(), reminders: [], txs: [], txsAll: [], prevTxs: [], range6: [], acctTxnsWide: rows });
+
+test("轉出用途 ① exclude_state 排除＝不算（就算有 purpose）", () => {
+  eq(spendOf([out("x", -500, "預約轉帳", { purpose: "🏡 房貸信貸", exclude_state: "exclude" })]).counted.length, 0);
+});
+test("轉出用途 ② purpose：分類 key 算進來、skip 不算", () => {
+  const r = spendOf([out("x", -18000, "預約轉帳", { purpose: "🏡 房貸信貸" }), out("y", -300, "轉帳", { purpose: "skip" })]);
+  eq(r.counted.map(c => [c.id, c.amount, c.forcedCat, c.fromAcct]), [["a:x", 18000, "🏡 房貸信貸", true]]);
+  eq(r.counted[0].source, "玉山(阿明)·活存", "來源是帳戶顯示名");
+  eq(r.counted[0].family_member_id, "m1", "歸屬＝帳戶擁有者");
+});
+test("轉出用途 ③ use: 規則（比對摘要、帳戶、金額）；purpose 優先於規則", () => {
+  const f = [filter("use:🧓 孝親", { kw: "孝親", account: "阿明", amount_min: 5000, amount_max: 5000, direction: "expense" })];
+  eq(spendOf([out("x", -5000, "孝親費")], { filters: f }).counted[0].forcedCat, "🧓 孝親");
+  eq(spendOf([out("x", -4000, "孝親費")], { filters: f }).counted.length, 0, "金額不符");
+  eq(spendOf([out("x", -5000, "孝親費", { purpose: "🛡️ 保險" })], { filters: f }).counted[0].forcedCat, "🛡️ 保險");
+  eq(spendOf([out("x", -5000, "孝親費")], { filters: [filter("use:skip", { kw: "孝親" })] }).counted.length, 0, "use:skip 明確不計");
+});
+test("轉出用途 ④ 摘要／備註像繳卡費自動不算（家用帳戶也不列待分類）", () => {
+  const r = spendOf([out("a", -9000, "信用卡費", {}, "H"), out("b", -9000, "轉帳", { note: "繳卡" }, "H"), out("c", -9000, "卡費", {}, "H")]);
+  eq([r.counted.length, r.pending.length], [0, 0]);
+});
+test("轉出用途 ⑤ 其餘不算；只有家用帳戶（且不是自動判定的互轉）才列待分用途", () => {
+  const r = spendOf([out("a", -100, "領現金", {}, "A"), out("b", -200, "領現金", {}, "H"), out("c", -300, "轉出", {}, "H")],
+    { auto: new Map([["c", "帳戶互轉"]]) });
+  eq([r.counted.length, r.pending.map(p => p.acctId)], [0, ["b"]]);
+});
+test("轉出用途：互轉的轉出有 purpose 仍算，轉入那側照舊排除不算收入", () => {
+  const rows = [out("w", -3000, "轉出", { purpose: "🛡️ 保險" }, "A"), acct("d", "B", 3000, "2026-02-10", "轉入")];
+  const [, auto] = E.autoExclusions([], rows, [accA, accB], [me]);
+  eq(auto.get("w"), "帳戶互轉");
+  eq(spendOf(rows, { accounts: [accA, accB], auto }).counted.map(c => c.id), ["a:w"]);
+  const r = E.analyze({ ...spendFixture(rows), members: [me], accounts: [accA, accB] }, E.Period.month(2026, 2), null, "2026-02-20");
+  eq([r.te, r.ti], [3000, 0], "支出算入、轉入不算收入");
+});
+test("use: 規則不影響交易表：不遮蔽後面的 cat:／exclude，也不被拿去分類交易", () => {
+  const use = filter("use:🏡 房貸信貸", { kw: "全聯", priority: 1 }), cat = filter("cat:🍜 飲食", { kw: "全聯", priority: 2 });
+  const t1 = tx("t", 100, "2026-02-01", "expense", "全聯");
+  eq(E.classifyF(t1, [], [use, cat]), "🍜 飲食", "use: 排在前面也不遮蔽 cat:");
+  eq(E.classifyF(t1, [], [use]), E.classify("全聯", []), "只有 use: 時交易照原本分類");
+  eq(E.txExclusionFilter(t1, [use, filter("exclude", { kw: "全聯", priority: 2 })]).action, "exclude");
+  eq(E.effExcludeF(t1, new Map(), [], [use])[0], false);
+  eq(E.matchFilterRule("全聯", "", "", 100, "expense", [use]), null);
+});
+test("analyze：偽支出進 te／byCat／bySrc／成員篩選／前期比較／近 6 月趨勢", () => {
+  const rows = [out("n1", -18000, "房貸", { purpose: "🏡 房貸信貸" }), out("n2", -6000, "房貸", { purpose: "🏡 房貸信貸" }, "A", "2026-01-10"),
+    out("n3", -2000, "房貸", { purpose: "🏡 房貸信貸" }, "A", "2025-12-10"), out("n4", -700, "家用", { purpose: "🍜 飲食" }, "H")];
+  const e1 = tx("e1", 500, "2026-02-03", "expense", "全聯", "email", { family_member_id: "m1" });
+  const d = { ...spendFixture(rows), txs: [e1], range6: [e1] };
+  const p = E.Period.month(2026, 2), r = E.analyze(d, p, null, "2026-02-20");
+  eq(r.te, 18000 + 700 + 500); eq(r.byCat.find(c => c[0] === "🏡 房貸信貸"), ["🏡 房貸信貸", 18000]);
+  eq(r.bySrc.map(x => x[0]).sort(), ["家用(阿華)·活存", "玉山(阿明)·活存", E.statSource(d.txs[0])].sort());
+  eq(r.prevTe, 6000, "前一期（1 月）含存款轉出"); eq(r.movers.find(m => m[0] === "🏡 房貸信貸")[1], 12000);
+  eq(r.trend6.slice(-3).map(x => x[1]), [2000, 6000, 19200], "12／1／2 月都含");
+  eq(r.fin.consumption, r.te, "consumption 同含");
+  eq(E.analyze(d, p, "m2", "2026-02-20").te, 700, "成員篩選：家用帳戶屬阿華");
+  const w = E.Period.acctWindow(p);
+  ok(w[0] <= "2025-09-01" && w[1] > "2026-03-01", "抓取窗涵蓋近 6 月與下月初");
+});
+test("detailView：偽支出出現在消費清單與分類裡、看得出來源帳戶；銀行列標出用途／待分類", () => {
+  const d = spendFixture([out("n1", -18000, "房貸", { purpose: "🏡 房貸信貸" }), out("n2", -250, "領現金", {}, "H")]);
+  const v = E.detailView(d, E.Period.month(2026, 2), null, "2026-02-20");
+  eq(v.te, 18000); eq(v.groups.map(g => [g.key, g.total]), [["🏡 房貸信貸", 18000]]);
+  const row = v.expRows[0]; eq([row.t.fromAcct, E.statSource(row.t), row.t.raw.id], [true, "玉山(阿明)·活存", "n1"]);
+  eq(v.bank.rows.map(r => [r.a.id, !!r.spend, r.pending]).sort(), [["n1", true, false], ["n2", false, true]]);
+  eq(E.detailView(d, E.Period.month(2026, 2), "m2", "2026-02-20").te, 0, "阿華的家用帳戶沒有已分用途的");
+});
+test("isFixedCat：內建預設、labels.fixed 覆寫（含改成自由）、📈 投資另歸投資", () => {
+  eq([E.isFixedCat("🛡️ 保險"), E.isFixedCat("🏡 房貸信貸"), E.isFixedCat("🧓 孝親"), E.isFixedCat("🍜 飲食"), E.isFixedCat("📦 其他")],
+    [true, true, true, false, false]);
+  eq(E.isFixedCat("🍜 飲食", [{ key: "🍜 飲食", fixed: true }]), true, "覆寫成固定");
+  eq(E.isFixedCat("🛡️ 保險", [{ key: "🛡️ 保險", fixed: false }]), false, "覆寫成自由");
+  eq(E.isFixedCat("🛡️ 保險", [{ key: "🛡️ 保險", fixed: null }]), true, "null＝內建預設");
+  eq([E.catBucket("📈 投資", []), E.catBucketLabel("🧓 孝親", [])], ["invest", "固定"]);
+});
+test("ratios：固定／自由／投資／儲蓄、base=0 給 null、儲蓄為負、待分用途", () => {
+  const by = [["🏡 房貸信貸", 30000], ["🍜 飲食", 10000], ["📈 投資", 5000]];
+  const r = E.financeRatios(by, [], 100000, 45000, 20000, [{ amount: 300 }, { amount: 200 }]);
+  eq([r.fixed, r.free, r.invest, r.saving], [30000, 10000, 25000, 100000 - 45000 - 20000], "📈 分類歸投資，且不重複扣");
+  eq(r.pct, { fixed: 30, free: 10, invest: 25, saving: 35 }); eq(r.pending, { n: 2, sum: 500 });
+  eq(E.financeRatios(by, [], 0, 45000, 0, []).pct, { fixed: null, free: null, invest: null, saving: null });
+  eq(E.financeRatios([["🍜 飲食", 9000]], [], 5000, 9000, 0, []).saving, -4000, "儲蓄為負＝動用存款");
+});
+test("analyze 回傳 ratios 與待分用途（只算本期、跟成員篩選）", () => {
+  const d = spendFixture([out("n1", -18000, "房貸", { purpose: "🏡 房貸信貸" }), out("p1", -250, "領現金", {}, "H"),
+    out("p2", -80, "領現金", {}, "H", "2026-01-10"), acct("s", "A", 60000, "2026-02-05", "薪資")]);
+  const r = E.analyze(d, E.Period.month(2026, 2), null, "2026-02-20");
+  eq([r.ratios.base, r.ratios.fixed, r.ratios.pct.fixed, r.ratios.pending], [60000, 18000, 30, { n: 1, sum: 250 }]);
+  eq(E.analyze(d, E.Period.month(2026, 2), "m1", "2026-02-20").ratios.pending.n, 0);
+});
+test("用途規則：useRuleRow 產生的規則自己能命中同一筆；尾碼；摘要與標籤", () => {
+  const a = out("x", -18000, "預約轉帳 房貸", {}, "A"), acc = { id: "A", name: "玉山(阿明)·活存 0123456" };
+  const row = { ...E.useRuleRow(a, acc, "🏡 房貸信貸"), active: true };
+  eq([row.account, row.amount_min, row.amount_max, row.direction, row.action], ["3456", 18000, 18000, "expense", "use:🏡 房貸信貸"]);
+  eq(E.acctUseOf(a, acc, [me], [row]), "🏡 房貸信貸");
+  eq(E.acctUseOf({ ...a, amount: -17999 }, acc, [me], [row]), null);
+  eq(E.acctRuleKey({ name: "示範·活存" }), "示範·活存", "沒有數字就用原名");
+  eq(E.filterRuleSummary(filter("use:skip", { kw: "卡" })), "含「卡」 → 存款轉出不計");
+  eq(E.useLabel("🧓 孝親", []), "🧓 孝親·固定");
+});
+test("新內建分類：🏡 房貸信貸、🧓 孝親 能分類；已有 labels 的家庭選單補上缺的內建分類", () => {
+  eq([E.classify("某銀行房貸", []), E.classify("孝親費", [])], ["🏡 房貸信貸", "🧓 孝親"]);
+  ok(E.AI_CATS.includes("🏡 房貸信貸") && E.AI_CATS.includes("🧓 孝親"));
+  const labels = [{ key: "🍜 飲食", label: "吃的", sort_order: 0 }, { key: "🛡️ 保險", label: "🛡️ 保險", sort_order: 1, active: false }];
+  const opts = E.categoryOptions(labels).map(o => o[0]);
+  eq(opts[0], "🍜 飲食"); ok(opts.includes("🏡 房貸信貸") && opts.includes("🧓 孝親"), "缺的內建項補在後面");
+  ok(!opts.includes("🛡️ 保險"), "停用的不補回來（有列在 labels 就算有）");
+  eq(E.categoryOptions([]).length, E.AI_CATS.length); eq(E.missingBuiltins([]), []);
+});
+
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);

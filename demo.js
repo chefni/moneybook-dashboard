@@ -54,6 +54,8 @@ const DemoStore = {
     DEMO_DATA.snaps = DEMO_DATA.snaps.filter(x => !(x.account_id === account_id && x.snapshot_date === snapshot_date));
     DEMO_DATA.snaps.push({ id: "n" + Date.now(), account_id, balance, cost, snapshot_date, source: "manual" });
   },
+  setPurpose: async (id, purpose) => { demoRow(DEMO_DATA.acct, id).purpose = purpose; },
+  setSpendAccount: async (id, on) => { demoRow(S.accounts, id).spend_account = on; },
   renameAccount: async (id, displayName) => { demoRow(S.accounts, id).display_name = displayName; },
   addAccount: async (name, type, member_id) => {
     const a = { id: "acc" + Date.now(), name, type, member_id, display_name: null, sort_order: S.accounts.length };
@@ -88,9 +90,11 @@ const DemoStore = {
     demoRow(S.members, id).user_id = uid;
     for (const m of S.members) if (m.id !== id && m.user_id === uid) m.user_id = null;
   },
-  seedLabels: async keys => { S.labels = keys.map((k, i) => ({ id: "l" + i, key: k, label: k, sort_order: i, builtin: true, active: true })); },
-  addLabel: async (key, label, sort_order, budget) => {
-    S.labels = [...S.labels, { id: "l" + Date.now(), key, label, sort_order, budget, builtin: false, active: true }];
+  seedLabels: async (keys, from = 0) => {
+    S.labels = [...S.labels, ...keys.map((k, i) => ({ id: "l" + from + "_" + i, key: k, label: k, sort_order: from + i, builtin: true, active: true }))];
+  },
+  addLabel: async (key, label, sort_order, budget, fixed = null) => {
+    S.labels = [...S.labels, { id: "l" + Date.now(), key, label, sort_order, budget, fixed, builtin: false, active: true }];
   },
   updateLabel: async (id, fields) => { demoRow(S.labels, id); S.labels = S.labels.map(l => (l.id === id ? { ...l, ...fields } : l)); },
   deleteLabel: async id => { demoRow(S.labels, id); S.labels = S.labels.filter(l => l.id !== id); },
@@ -144,7 +148,7 @@ function demoPeriod(p){
   return { txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"),
            prevTxs: uniq.filter(t => inR(t, E.Period.startDate(pv), E.Period.endExclusive(pv))),
            range6: uniq.filter(t => inR(t, `${y5}-${pad(m5)}-01`, `${y1}-${pad(m1)}-01`)),
-           acctTxnsWide: DEMO_DATA.acct.filter(t => inR(t, addDays(a, -5), addDays(b, 5))) };
+           acctTxnsWide: DEMO_DATA.acct.filter(t => inR(t, ...E.Period.acctWindow(p))) };
 }
 function buildDemo(){
   uid = "u1";   // 示範登入者＝爸爸（記一筆預設算他的）
@@ -153,7 +157,7 @@ function buildDemo(){
                    { id: "m2", name: "媽媽", user_id: "u2", sort_order: 1 }, { id: "m3", name: "小寶", user_id: null, sort_order: 2 }];
   const accounts = [
     { id: "a1", name: "示範銀行(爸爸)·活存", type: "bank", member_id: "m1" },
-    { id: "a2", name: "示範銀行(媽媽)·活存", type: "bank", member_id: "m2" },
+    { id: "a2", name: "示範銀行(媽媽)·活存", type: "bank", member_id: "m2", spend_account: true },   // 家用帳戶：轉出要分用途
     { id: "a3", name: "示範證券(爸爸)·台積電", type: "stock", member_id: "m1" },      // 有成本 → 損益
     { id: "a4", name: "示範投信(媽媽)·全球基金", type: "stock", member_id: "m2" },    // 名稱含基金 → 基金信託
     { id: "a5", name: "示範銀行(爸爸)·房貸", type: "bank", member_id: "m1" },        // 負數 → 負債
@@ -171,6 +175,8 @@ function buildDemo(){
   const excludeRules = [{ id: "xr1", pattern: "示範代墊款", exclude_state: "exclude", source: "user" }];
   const filterRules = [
     { id: "fr1", name: "大額先不算", priority: 100, kw: "", account: "", amount_min: 100000, amount_max: null, direction: "expense", action: "exclude", active: false },
+    { id: "fr3", name: "轉出用途：房貸", priority: 100, kw: "房貸", account: "活存", amount_min: 18000, amount_max: 18000, direction: "expense", action: "use:🏡 房貸信貸", active: true },
+    { id: "fr4", name: "轉出用途：孝親", priority: 100, kw: "孝親", account: "", amount_min: null, amount_max: null, direction: "expense", action: "use:🧓 孝親", active: true },
     { id: "fr2", name: "", priority: 50, kw: "示範測試", account: "", amount_min: null, amount_max: null, direction: "any", action: "cat:" + cat("娛樂"), active: true }];
   Object.assign(S, { members, accounts, labels, cats, reminders, catRules, excludeRules, filterRules, subIgnores: new Set(["示範停車場"]) });
   const txs = [], acct = [], snaps = [];
@@ -209,6 +215,13 @@ function buildDemo(){
     acct.push({ id: "w" + (++n), account_id: "a1", occurred_at: day(6), amount: -20000, description: "網銀轉出", note: "給媽媽", balance: 368000 - k * 4000 });
     acct.push({ id: "d" + (++n), account_id: "a2", occurred_at: day(6), amount: 20000, description: "轉入", note: "" });
     acct.push({ id: "i" + (++n), account_id: "a2", occurred_at: day(21), amount: 37, description: "活儲利息", note: "" });
+    // 存款轉出的用途：預約轉帳（規則認得）、手動指定、繳卡費（自動不算）、家用帳戶的待分類
+    acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(8), amount: -18000, description: "預約轉帳 房貸", note: "" });
+    acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(10), amount: -5000, description: "孝親費", note: "" });
+    acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(15), amount: -15000, description: "信用卡費", note: "" });
+    acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(11), amount: -6000, description: "手機轉帳 補習班", note: "", purpose: "📚 教育" });
+    acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(18), amount: -2500, description: "手機轉帳", note: "" });
+    acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(22), amount: -4000, description: "ATM 領現金", note: "" });
     // 餘額快照：每月一次（本月＝今天，可試「今天已記過」的覆蓋確認）
     const sd = k === 0 ? E.todayIso() : day(28);
     const S_ = (account_id, balance, cost = null) => snaps.push({ id: "n" + (++n), account_id, balance, cost, snapshot_date: sd, source: "email" });

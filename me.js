@@ -49,10 +49,10 @@ Object.assign(LiveStore, {
   },
 
   // ── 分類清單與預算（category_labels）──
-  seedLabels: keys => affected(sb.from("category_labels").insert(keys.map((k, i) =>
-    ({ household_id: hid, key: k, label: k, sort_order: i, builtin: true, active: true })))),
-  addLabel: (key, label, sort_order, budget) => affected(sb.from("category_labels")
-    .insert({ household_id: hid, key, label, sort_order, budget, builtin: false })),
+  seedLabels: (keys, from = 0) => affected(sb.from("category_labels").insert(keys.map((k, i) =>
+    ({ household_id: hid, key: k, label: k, sort_order: from + i, builtin: true, active: true })))),
+  addLabel: (key, label, sort_order, budget, fixed = null) => affected(sb.from("category_labels")
+    .insert({ household_id: hid, key, label, sort_order, budget, builtin: false, ...(fixed != null ? { fixed } : {}) })),
   updateLabel: (id, fields) => affected(sb.from("category_labels").update(fields).eq("id", id)),
   deleteLabel: id => affected(sb.from("category_labels").delete().eq("id", id)),
 
@@ -345,20 +345,26 @@ function labelsBody(b){
     return;
   }
   for (const l of labels){
-    b.appendChild(setRow(l.label, (l.budget > 0 ? `每月預算 ${nt(l.budget)}` : "未設預算") + (l.builtin ? "" : "・自訂"),
+    b.appendChild(setRow(l.label, (l.budget > 0 ? `每月預算 ${nt(l.budget)}` : "未設預算") + (l.builtin ? "" : "・自訂") + `・${E.catBucketLabel(l.key, labels)}`,
       btn("✎", () => labelDialog(l), "link", `編輯 ${l.label}`),
       l.builtin ? null : btn("🗑", () => deleteLabelDialog(l), "link danger", `刪除 ${l.label}`)));
   }
+  const missing = E.missingBuiltins(labels);   // 後來新增的內建分類（選單已經看得到，補進清單才能改名、設預算、切固定／自由）
+  if (missing.length)
+    b.appendChild(btn(`補上新的內建分類（${missing.join("、")}）`, () => confirmWrite("補上新的內建分類？", [`會把 ${missing.join("、")} 加進分類清單。`], "補上",
+      () => Store.seedLabels(missing, labels.reduce((x, y) => Math.max(x, y.sort_order ?? 0), 0) + 1).catch(e => { if (!e || e.code !== "23505") throw e; })), ""));
   b.appendChild(btn("➕ 新增分類", () => labelDialog(null), ""));
 }
 /** 新增（l＝null）或編輯分類：名稱必填；預算留空＝不設 */
 function labelDialog(l){
   const f = formDialog(l ? "編輯分類" : "新增分類", l ? "儲存" : "新增");
   const name = el("input"), budget = el("input");
+  // 固定／自由：「預設」＝用內建判定（fixed 存 null）。新增的自訂分類預設算自由
+  const bucket = select([[`預設（${l ? E.catBucketLabel(l.key, []) : "自由"}）`, ""], ["固定開銷", "1"], ["自由花費", "0"]], l && l.fixed != null ? (l.fixed ? "1" : "0") : "");
   name.value = l ? l.label : ""; name.maxLength = 30;
   name.placeholder = "可加 emoji，如 🎮 娛樂";
   budget.inputMode = "numeric"; budget.value = l && l.budget > 0 ? String(l.budget) : "";
-  add(f.body, field("顯示名稱", name), field("每月預算 NT$（留空＝不設）", budget),
+  add(f.body, field("顯示名稱", name), field("每月預算 NT$（留空＝不設）", budget), field("算哪一類開銷（四個比例用）", bucket),
     el("p", "note", l ? "改名只動顯示名稱，已學到的規則不受影響。" : "新分類會出現在「改分類」「記一筆」的選單裡。"));
   const check = f.check = () => { f.save.disabled = f.sending || !name.value.trim(); };
   name.addEventListener("input", check);
@@ -366,8 +372,9 @@ function labelDialog(l){
   f.save.addEventListener("click", async () => {
     const t = budget.value.trim(), bv = t ? E.intIn(t, 1, 999999999) : null;
     if (t && bv == null){ f.err.textContent = "預算只能填 1 以上的整數，或留空"; return; }
-    const ok = await f.submit(() => (l ? Store.updateLabel(l.id, { label: name.value.trim(), budget: bv })
-      : Store.addLabel(randomKey(), name.value.trim(), S.labels.reduce((x, y) => Math.max(x, y.sort_order ?? 0), 0) + 1, bv)));
+    const fixed = bucket.value === "" ? null : bucket.value === "1";
+    const ok = await f.submit(() => (l ? Store.updateLabel(l.id, { label: name.value.trim(), budget: bv, ...(fixed !== (l.fixed ?? null) ? { fixed } : {}) })
+      : Store.addLabel(randomKey(), name.value.trim(), S.labels.reduce((x, y) => Math.max(x, y.sort_order ?? 0), 0) + 1, bv, fixed)));
     if (ok){ f.d.close(); refreshData(); }
   });
 }

@@ -190,6 +190,7 @@ function paintAccount(root, acc){
       add(el("div", "stats"), add(el("div"), el("span", "muted", "市值"), el("b", null, E.ntD(s.balance))),
                               add(el("div"), el("span", "muted", "成本"), el("b", null, E.ntD(s.cost))))));
   }
+  if (!isStock) spendToggle(root, acc);
   root.appendChild(el("h3", "vh", isStock ? "市值變化" : "餘額變化"));
   trendChart(root, pf.trend, (isStock ? "市值" : "餘額") + "變化折線圖");
   if (!isStock) accountTxns(root, acc);
@@ -198,6 +199,7 @@ function paintAccount(root, acc){
 /** 存款帳戶的流水（唯讀；點進來才抓、分頁抓完） */
 function accountTxns(root, acc){
   root.appendChild(el("h3", "vh", "交易明細（轉帳/出入金）"));
+  if (acc.spend_account !== true) root.appendChild(el("p", "note", "點任一筆轉出，可指定它要算成哪一類消費（房貸、保險、孝親…）。"));
   const got = AV.txns.get(acc.id);
   if (!got){
     AV.txns.set(acc.id, { rows: null, err: "" });
@@ -210,16 +212,68 @@ function accountTxns(root, acc){
   if (!got.rows.length){ root.appendChild(el("p", "muted", "此帳戶尚無交易明細（目前僅部分銀行對帳單有解析交易）")); return; }
   for (const t of got.rows.slice(0, AV.txShow)){
     const amt = Number(t.amount), plus = amt >= 0;
-    root.appendChild(add(el("div", "li"), add(el("div", "main"),
-      add(el("span", "m"), el("span", null, (plus ? "＋ " : "－ ") + (t.description || "（無摘要）")),
-          el("small", null, t.occurred_at + (t.note ? ` · ${t.note}` : "") + (t.balance != null ? ` · 餘 ${E.ntD(t.balance)}` : ""))),
-      el("b", "a " + (plus ? "income" : "expense"), (plus ? "+" : "-") + E.ntD(Math.abs(amt))))));
+    const main = el(plus ? "div" : "button", "main"), sub = el("small");
+    const tag = plus ? null : useTag(t, acc);
+    if (tag) sub.appendChild(el("span", "tag" + (tag.pending ? " warn" : ""), tag.text));
+    sub.appendChild(document.createTextNode(t.occurred_at + (t.note ? ` · ${t.note}` : "") + (t.balance != null ? ` · 餘 ${E.ntD(t.balance)}` : "")));
+    add(main, add(el("span", "m"), el("span", null, (plus ? "＋ " : "－ ") + (t.description || "（無摘要）")), sub),
+      el("b", "a " + (plus ? "income" : "expense"), (plus ? "+" : "-") + E.ntD(Math.abs(amt))));
+    if (!plus) main.addEventListener("click", () => purposeDialog(t, acc));
+    root.appendChild(add(el("div", "li"), main));
   }
   if (got.rows.length > AV.txShow){
     const more = el("button", null, `再顯示 300 筆（共 ${got.rows.length} 筆）`);
     more.addEventListener("click", () => { AV.txShow += 300; paintAccounts(); });
     root.appendChild(more);
   }
+}
+
+/* ═══════════ 存款轉出的用途（帳戶明細與明細頁共用） ═══════════ */
+/** 一筆轉出的用途標籤：{ text, pending }；沒有用途也不是待分類回 null */
+function useTag(a, acc){
+  if (a.exclude_state === "exclude") return null;
+  const use = E.acctUseOf(a, acc, S.members, S.filterRules);
+  if (use != null) return { text: E.useLabel(use, S.labels), pending: false };
+  return acc.spend_account && !E.isCardFeeText(a) ? { text: "待分用途", pending: true } : null;
+}
+/** 家用帳戶開關：打開後，這個帳戶沒分用途的轉出會被列為待分類（分析頁會提醒） */
+function spendToggle(root, acc){
+  const [box, chk] = checkbox("家用帳戶：轉出要分用途", acc.spend_account === true);
+  chk.addEventListener("change", async () => {
+    chk.disabled = true;
+    if (await guarded(() => Store.setSpendAccount(acc.id, chk.checked))) refreshData();
+    else { chk.checked = !chk.checked; chk.disabled = false; }
+  });
+  add(root, box, el("p", "note", "例：配偶轉來的家用錢，之後再轉出去繳學費、孝親、日常花費，要一筆一筆分成固定或自由開支。"));
+}
+/** 這筆轉出的用途：選分類／不計／跟隨規則；可順手記成規則（同帳戶、同摘要、同金額以後都這樣算） */
+function purposeDialog(a, acc){
+  const f = formDialog("這筆轉出的用途");
+  const followed = E.acctUseOf({ ...a, purpose: null }, acc, S.members, S.filterRules);
+  const opts = [[`跟隨規則（目前：${followed == null ? "不計" : E.useLabel(followed, S.labels)}）`, ""], ["不計（轉帳）", "skip"],
+    ...E.categoryOptions(S.labels).map(([k, label]) => [`${label}·${E.catBucketLabel(k, S.labels)}`, k])];
+  if (a.purpose && !opts.some(o => o[1] === a.purpose)) opts.push([E.labelOf(a.purpose, S.labels), a.purpose]);   // 分類已被刪掉也別悄悄改掉
+  const pick = select(opts, a.purpose || "");
+  const [remember, rememberChk] = checkbox("以後這個帳戶、同摘要、同金額的轉出都這樣算", false);
+  // 沒摘要時規則只剩「帳戶＋金額」，會誤抓同額的其他轉出 → 不給記成規則
+  const canRemember = E.normalizeMerchant(a.description) !== "";
+  const check = f.check = () => { rememberChk.disabled = !pick.value || !canRemember; if (rememberChk.disabled) rememberChk.checked = false; };
+  pick.addEventListener("change", check);
+  add(f.body, el("b", null, a.description || "（無摘要）"), el("p", "muted", `${a.occurred_at} · ${E.ntD(Math.abs(a.amount))} · ${E.accountDisplay(acc, S.members)}`),
+    field("這筆算成", pick), remember,
+    el("p", "note", "「不計」＝不算消費（例如繳卡費、自己帳戶間搬錢）；選分類＝算成那一類的支出，固定或自由看該分類的設定。"));
+  check();
+  f.save.addEventListener("click", async () => {
+    const v = pick.value || null;
+    const ok = await f.submit(async () => {
+      await Store.setPurpose(a.id, v);
+      if (v && rememberChk.checked) await Store.addFilterRule(E.useRuleRow(a, acc, v)).catch(e => {
+        refreshData();   // 用途已存：畫面先跟上，再報規則失敗
+        throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);
+      });
+    });
+    if (ok){ f.d.close(); refreshData(); }
+  });
 }
 
 /* ═══════════ 寫入：更新餘額、改名、新增帳戶 ═══════════ */
