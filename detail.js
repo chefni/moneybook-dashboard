@@ -16,7 +16,7 @@ const DV = {
   open: new Set(),       // 展開的分組
   q: "", found: null, searchErr: "", seq: 0, timer: 0,   // 跨月搜尋
   aged: null, agedStale: true,   // 超過 45 天沒對到帳單的刷卡通知（全家、不隨期間）；重抓時先留著舊的，新的到了再換
-  v: null, d: null,      // 目前畫面用的 detailView 結果與期間資料
+  v: null, d: null, p: null,   // 目前畫面用的 detailView 結果、期間資料與其期間
   top: null, search: null, exportBtn: null, body: null   // 固定的版面節點（搜尋框不重建，打字才不會掉焦點）
 };
 /** 一筆交易的顯示名：商家，沒有就備註，再沒有就 none */
@@ -34,7 +34,7 @@ function saved(){
 /* ═══════════ 版面 ═══════════ */
 function paintDetail(d, p){
   if (!DV.top) buildDetailFrame();
-  DV.d = d;
+  DV.d = d; DV.p = p;
   DV.v = E.detailView({ ...S, ...d }, p, sel);
   DV.exportBtn.disabled = !DV.v.txs.length;
   paintAlerts();
@@ -77,6 +77,7 @@ function paintAlerts(){
 /** 內容區：搜尋中就只顯示搜尋結果（同 App），否則四個檢視之一 */
 function drawBody(){
   const b = DV.body, v = DV.v;
+  resetCharts();   // 展開分組也會重畫：舊的圖表先收掉
   b.replaceChildren();
   if (DV.q.trim()) return drawSearch(b);
   if (v.empty){
@@ -142,9 +143,7 @@ function drawExpense(b, v){
   if (!v.expRows.length){ b.appendChild(el("p", "muted", "本期無支出紀錄（可切「收入」看進帳）")); return; }
   if (v.provisional > 0)
     b.appendChild(el("p", "note", `其中 ${E.compactNt(v.provisional)} 尚未對帳（來自刷卡通知），帳單到會自動校正金額`));
-  const toAnalysis = el("button", "link", "看佔比圖表與趨勢 → 「📊 分析」");
-  toAnalysis.addEventListener("click", () => setTab("analysis"));
-  add(b, el("p", "note", `支出 ${nt(v.te)} · 共 ${v.expRows.length} 筆 · 點分類展開、點單筆改分類/編輯/不納入`), toAnalysis);
+  add(b, el("p", "note", `支出 ${nt(v.te)} · 共 ${v.expRows.length} 筆 · 點分類展開、點單筆改分類/編輯/不納入`));
   const mode = el("div", "chips");
   for (const [flat, label] of [[false, "依分類"], [true, "依日期"]]){
     const c = el("button", "chip" + (DV.flat === flat ? " active" : ""), label);
@@ -154,11 +153,40 @@ function drawExpense(b, v){
   }
   b.appendChild(mode);
   if (DV.flat){ for (const r of v.expRows) b.appendChild(expenseRow(r)); return; }
+  catChart(b, v);
   for (const g of v.groups){
     const key = "exp:" + g.key;
     b.appendChild(groupHead(key, E.labelOf(g.key, S.labels), g));
     if (DV.open.has(key)) for (const r of g.rows) b.appendChild(expenseRow(r));
   }
+}
+
+/** 「依分類」上方的圖表（原本分析頁的「圖表與分類」併進來）：圓餅／長條／近 6 月／收起。
+ *  圖下面就是分類清單本身（點分類展開逐筆），不再另列一份分類長條 */
+function catChart(b, v){
+  const tabs = el("div", "chips");
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "圖表");
+  ["圓餅", "長條", "近6月", "收起圖表"].forEach((n, i) => {
+    const c = el("button", "chip" + (ui.chart === i ? " active" : ""), n);
+    c.setAttribute("aria-pressed", String(ui.chart === i));
+    c.addEventListener("click", () => { ui.chart = i; drawBody(); });
+    tabs.appendChild(c);
+  });
+  b.appendChild(tabs);
+  if (ui.chart === 3 || !v.byCat.length) return;
+  if (!window.Chart){ b.appendChild(el("p", "warn", "圖表程式庫沒載入（可能網路不穩），下方數字不受影響。")); return; }
+  const cv = el("canvas");
+  cv.setAttribute("role", "img");
+  cv.setAttribute("aria-label", "支出圖表（數值見下方分類清單）");
+  const box = el("div", "cwrap");
+  // 橫條圖的高度跟著分類數長（固定比例的話分類一多就擠成一團）
+  if (ui.chart === 1) box.style.height = Math.max(160, v.byCat.length * 26 + 30) + "px";
+  add(b, add(box, cv));
+  // 近 6 月要跨月資料：跟分析頁同一個算法（含存款轉出算成的支出），只在選它時才算
+  const trend = ui.chart === 2 ? E.analyze({ ...S, ...DV.d }, DV.p, sel).trend6 : [];
+  requestAnimationFrame(() => drawChart(cv, v.byCat, trend));
+  if (ui.chart === 2) b.appendChild(el("p", "note", "近 6 個月支出"));
 }
 
 /** 列的小字行；固定支出的列前面加「固定」小標籤（消費不加，免得滿版標籤） */

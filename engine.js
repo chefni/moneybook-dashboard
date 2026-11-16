@@ -596,7 +596,7 @@ function analyze(d, period, sel, today = todayIso()){
            trend6, fin, ratios, movers: prevByCat.size ? movers : [], subs };
 }
 
-/** 📐 四個比例：固定支出／消費支出／投資／儲蓄各占真實收入幾 %。逐筆判桶（fixedInfo），同分類的兩筆可以一固定一消費。
+/** 📐 收入去向（舊稱四個比例）：固定支出／消費支出／投資／儲蓄各占真實收入幾 %。逐筆判桶（fixedInfo），同分類的兩筆可以一固定一消費。
  *  投資＝買入投資＋分類為 📈 投資的支出（後者已在 te 裡，所以儲蓄＝收入−te−買入投資 不會重複扣）。收入≤0 時百分比為 null。
  *  exp＝本期算進來的支出列（含存款轉出的偽支出）；ctx＝{ catRules, filterRules, cats }。 */
 function financeRatios(exp, ctx, base, te, investIn, pendingRows, investRows = []){

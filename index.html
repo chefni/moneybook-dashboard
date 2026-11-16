@@ -43,8 +43,8 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=37ee65d617"></script>
-<script defer src="detail.js?v=8c73c26d53"></script>
+<script defer src="engine.js?v=21c25c8bf7"></script>
+<script defer src="detail.js?v=f5bd6290a1"></script>
 <script defer src="accounts.js?v=acd02d3ee1"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
@@ -552,7 +552,7 @@ function fold(key, title, summary, body){
 function row(label, value, cls){
   return add(el("div", "row"), el("span", null, label), el("b", cls || null, value));
 }
-/** 可點的一列（📐 四個比例）：點開列出這一桶的紀錄；沒有紀錄就是一般列 */
+/** 可點的一列（📐 收入去向）：點開列出這一桶的紀錄；沒有紀錄就是一般列 */
 function drillRow(label, value, list){
   if (!list.length) return row(label, value);
   const b = add(el("button", "row drill"), el("span", null, `${label}（${list.length} 筆）`), el("b", null, value));
@@ -656,30 +656,11 @@ function paintAnalysis(d, p){
           ? ` · 另有 ${r.exclCount} 筆互轉/退款/重複自動排除（下方「已排除」可核對）` : "")));
     }));
 
-  // ── 💎 理財指標 ──
-  const f = r.fin;
-  if (f.realInc > 0 || f.investIn > 0 || f.investOut > 0 || f.consumption > 0){
-    const pct = v => (v == null ? "—" : `${v}%`);
-    // 收入很少時比率會變成 −20000% 這種沒意義的數字：支出超過收入兩倍就改講白話
-    const saving = f.savingRate == null ? "—（本期沒有收入）"
-      : f.savingRate < -100 ? `支出是收入的 ${Math.round(f.consumption / f.realInc)} 倍` : `${f.savingRate}%`;
-    root.appendChild(fold("fin", "💎 理財指標（本期）", `儲蓄率 ${saving} · 投資投入 ${nt(f.investIn)}`, b => {
-      add(b, el("p", "note", "買股票＝投資投入（不算消費）；賣股＝投資回收（不算收入，資產轉移）；內部轉入不算真實收入。儲蓄率＝(真實收入−消費)/真實收入。"),
-        row("真實收入（不含轉入/賣股）", nt(f.realInc)), row("消費支出（不含投資）", nt(f.consumption)),
-        row("儲蓄率", saving, (f.savingRate || 0) >= 0 ? "income" : "expense"),
-        f.savingRate != null && f.savingRate < -100
-          ? el("p", "note", "收入只算到有進帳紀錄的帳戶；薪資若入在還沒接上的帳戶，這裡會偏低。") : null,
-        row("本期投資投入（買入）", nt(f.investIn)),
-        f.investOut > 0 ? row("本期投資回收（賣出）", nt(f.investOut)) : null,
-        row("投資率（投入/真實收入）", pct(f.investRate)), row("被動收入（利息+配息）", nt(f.passive)));
-    }));
-  }
-
-  // ── 📐 四個比例 ──
+  // ── 📐 收入去向（固定／消費／投資／儲蓄各占收入幾 %）──
   const rt = r.ratios;
   if (rt.base > 0 || rt.pending.n){
     const pct = v => (v == null ? "—" : `${v}%`);
-    root.appendChild(fold("ratio", "📐 四個比例（本期）",
+    root.appendChild(fold("ratio", "📐 收入去向（本期）",
       rt.base > 0 ? `固定支出 ${pct(rt.pct.fixed)} · 消費支出 ${pct(rt.pct.free)} · 投資 ${pct(rt.pct.invest)} · 儲蓄 ${pct(rt.pct.saving)}` : "本期沒有真實收入，算不出比例", b => {
       add(b, el("p", "note", `各占「真實收入」${nt(rt.base)} 的比例。預設只有貸款、保險、學費、孝親算固定支出，其餘算消費支出；每一筆都可以在明細頁點開自己勾（也可讓之前與往後相同的紀錄比照）。存款轉出要先分用途才會算進來。`),
         drillRow("固定支出", `${nt(rt.fixed)}（${pct(rt.pct.fixed)}）`, rt.rows.fixed),
@@ -712,36 +693,7 @@ function paintAnalysis(d, p){
     }));
   }
 
-  // ── 📈 圖表與分類 ──
-  const byCat = r.byCat;
-  root.appendChild(fold("chart", "📈 圖表與分類",
-    byCat.length ? `${byCat.length} 個分類 · 最多：${L(byCat[0][0])} ${nt(byCat[0][1])}` : "本期沒有支出", b => {
-      const tabs = el("div", "tabs");
-      ["圓餅", "長條", "近6月"].forEach((n, i) => {
-        const t = el("button", "chip" + (ui.chart === i ? " active" : ""), n);
-        t.addEventListener("click", () => { ui.chart = i; repaint(); });
-        tabs.appendChild(t);
-      });
-      const cv = el("canvas");
-      cv.setAttribute("role", "img");
-      cv.setAttribute("aria-label", "支出圖表（數值見下方分類清單）");
-      // 橫條圖的高度跟著分類數長（固定比例的話分類一多就擠成一團）
-      const box = el("div", "cwrap");
-      if (ui.chart === 1) box.style.height = Math.max(160, byCat.length * 26 + 30) + "px";
-      add(b, tabs, add(box, cv));
-      if (!window.Chart) add(b, el("p", "warn", "圖表程式庫沒載入（可能網路不穩），下方數字不受影響。"));
-      else requestAnimationFrame(() => drawChart(cv, byCat, r.trend6));
-      if (ui.chart === 0 && byCat.length) add(b, el("p", "note", `合計 ${nt(te)}`));
-      if (ui.chart === 2) add(b, el("p", "note", "近 6 個月支出"));
-      if (byCat.length) add(b, el("p", "note", "👆 點任一分類 → 展開該類逐筆"));
-      const max = byCat.length ? byCat[0][1] : 0;
-      for (const [c, amt] of byCat){
-        const key = "cat:" + c;
-        b.appendChild(sbar(L(c), amt, max, te, { onClick: () => toggleBar(key) }));
-        if (ui.bars.has(key))
-          b.appendChild(detail(r.exp.filter(t => E.classifyF(t, S.catRules, S.filterRules, S.cats) === c), amt));
-      }
-    }));
+  const byCat = r.byCat;   // 圖表與分類已併進「🧾 明細 → 支出 → 依分類」；下方預算仍要用
 
   // ── ✈️ 旅遊：跨月的行程總花費，與上方「本期」無關；收合時不載入（同 App v93） ──
   root.appendChild(tripFold());
@@ -1280,13 +1232,13 @@ function drawChart(cv, byCat, trend6){
     charts.push(new Chart(cv, { type: "doughnut",
       data: { labels: byCat.map(c => `${L(c[0])} ${tot > 0 ? Math.round(c[1] * 100 / tot) : 0}%`),
               datasets: [{ data: byCat.map(c => c[1]), backgroundColor: byCat.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]), borderWidth: 0 }] },
-      options: { plugins: { legend: { position: "bottom", labels: { color: ink, boxWidth: 12 } },
+      options: { animation: false, plugins: { legend: { position: "bottom", labels: { color: ink, boxWidth: 12 } },
                             tooltip: { callbacks: { label: c => `${c.label} ${nf(c.raw)}` } } } } }));
   } else {
     const data = ui.chart === 1 ? byCat.map(c => [L(c[0]), c[1]]) : trend6;
     charts.push(new Chart(cv, { type: "bar",
       data: { labels: data.map(x => x[0]), datasets: [{ data: data.map(x => x[1]), backgroundColor: "#0abde3", borderRadius: 4 }] },
-      options: { indexAxis: ui.chart === 1 ? "y" : "x", maintainAspectRatio: ui.chart !== 1, plugins: { legend: { display: false },
+      options: { animation: false, indexAxis: ui.chart === 1 ? "y" : "x", maintainAspectRatio: ui.chart !== 1, plugins: { legend: { display: false },
                    tooltip: { callbacks: { label: c => nf(c.raw) } } },
                  scales: { x: { ticks: { color: sub } }, y: { ticks: { color: sub } } } } }));
   }
