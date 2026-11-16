@@ -656,13 +656,13 @@ const ex = (id, amount, merchant, extra = {}) => tx(id, amount, "2026-02-10", "e
 const ctx0 = { catRules: [], filterRules: [], cats: [] };
 const nat = (t, filters = []) => E.fixedInfo(t, { ...ctx0, filterRules: filters });
 
-test("支出性質 預設：只有房貸信貸／保險／教育是固定；孝親、稅務等預設消費；📈 投資歸投資", () => {
+test("支出性質 預設：只有房貸信貸／保險／教育／孝親是固定；稅務、電信等預設消費；📈 投資歸投資", () => {
   const cat = key => nat({ ...ex("t", 100, "x"), forcedCat: key });
-  eq(["🏡 房貸信貸", "🛡️ 保險", "📚 教育"].map(k => cat(k).bucket), ["fixed", "fixed", "fixed"]);
-  eq(["🧓 孝親", "🧾 稅務", "💊 醫療", "🚗 交通", "📱 電信", "🍜 飲食", "📦 其他"].map(k => cat(k).bucket), Array(7).fill("free"));
+  eq(["🏡 房貸信貸", "🛡️ 保險", "📚 教育", "🧓 孝親"].map(k => cat(k).bucket), Array(4).fill("fixed"));
+  eq(["🧾 稅務", "💊 醫療", "🚗 交通", "📱 電信", "🍜 飲食", "📦 其他"].map(k => cat(k).bucket), Array(6).fill("free"));
   eq([cat("📈 投資").bucket, cat("📈 投資").fixed], ["invest", false], "投資不算固定也不算消費");
   eq(cat("🛡️ 保險").by, "default");
-  eq([...E.FIXED_CATS].sort(), ["🏡 房貸信貸", "🛡️ 保險", "📚 教育"].sort());
+  eq([...E.FIXED_CATS].sort(), ["🏡 房貸信貸", "🛡️ 保險", "📚 教育", "🧓 孝親"].sort());
 });
 test("支出性質：同一商家先後設了兩條 fix: 規則，後設的贏（與載入順序無關）", () => {
   const old = filter("fix:fixed", { kw: "某補習班", created_at: "2026-10-01T00:00:00Z" });

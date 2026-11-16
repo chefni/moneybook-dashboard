@@ -366,9 +366,8 @@ function editTx(t, st){
   if (t.kind === "expense"){ body.appendChild(natureSection(t, d)); body.appendChild(tripSection(t)); body.appendChild(categorySection(t, d)); }
 }
 
-/** 支出性質：這一筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費算固定，分類不再綁定）。
- *  一律寫這一筆的 transactions.fixed；勾的和目前判定不同時，可再勾「之前／往後相同的紀錄也比照」——
- *  存成 fix: 規則（只勾往後＝從這筆日期起；只勾之前＝到這筆日期止；都勾＝不限日期）。
+/** 支出性質：這一筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費、孝親算固定，分類不再綁定）。
+ *  值有改才寫這一筆的 transactions.fixed；勾「之前與往後相同的紀錄也比照」＝存一條不限日期的 fix: 規則。
  *  其他筆若各自手動勾過，仍以它們自己的為準（優先序：紀錄 ＞ 規則 ＞ 預設）。📈 投資的支出不分固定／消費。 */
 function natureSection(t, d){
   const info = E.fixedInfo(t, S);
@@ -378,25 +377,25 @@ function natureSection(t, d){
   const BASIS = { record: "這筆手動設定", rule: "規則", default: "預設" };
   const cur = () => `${info.fixed ? "固定支出" : "消費支出"}（${BASIS[info.by]}）`;
   const [box, chk] = checkbox("固定支出（沒勾＝消費支出）", info.fixed);
-  const [beforeBox, beforeChk] = checkbox("之前相同的紀錄也比照", false), [afterBox, afterChk] = checkbox("往後相同的紀錄也比照", false);
+  const [sameBox, sameChk] = checkbox("之前與往後相同的紀錄也比照", false);
   const save = el("button", "primary", "儲存支出性質"), scope = el("div");
   // 商家空白不能記成規則（同分類的商家規則）：只能改這一筆
   const canRule = String(t.merchant || "").trim() !== "";
-  add(scope, canRule ? beforeBox : null, canRule ? afterBox : null,
+  add(scope, canRule ? sameBox : null,
     el("p", "note", canRule ? `「相同」＝商家是「${String(t.merchant).trim()}」的支出。若其他筆各自手動勾過，仍以它們自己的為準。`
                             : "這筆沒有商家名，無法比照相同的紀錄；可用上面的「✏️ 編輯」補上名稱。"));
-  // 之前／往後一直看得到：這筆本來就對、只想讓其他相同紀錄比照時，不必先改一次再改回來
-  const check = () => { save.hidden = chk.checked === info.fixed && !(canRule && (beforeChk.checked || afterChk.checked)); };
-  for (const c of [chk, beforeChk, afterChk]) c.addEventListener("change", check);
+  // 比照選項一直看得到：這筆本來就對、只想讓其他相同紀錄比照時，不必先改一次再改回來
+  const check = () => { save.hidden = chk.checked === info.fixed && !(canRule && sameChk.checked); };
+  for (const c of [chk, sameChk]) c.addEventListener("change", check);
   const rule = info.rule ? `；規則：${E.filterRuleSummary(info.rule, S.labels)}` : "";
   add(sec, add(el("summary", null, "支出性質"), el("small", null, `目前：${cur()}${rule}`)), box, scope, save, err);
   check();
   save.addEventListener("click", async () => {
-    const before = canRule && beforeChk.checked, after = canRule && afterChk.checked;
+    const same = canRule && sameChk.checked;
     const fixed = chk.checked;
-    const ok = await busy([save, chk, beforeChk, afterChk], err, async () => {
+    const ok = await busy([save, chk, sameChk], err, async () => {
       if (fixed !== info.fixed) await Store.updateTx(t.id, { fixed });
-      if (before || after) await Store.addFilterRule(E.fixRuleRow(t, fixed, before, after)).catch(e => {
+      if (same) await Store.addFilterRule(E.fixRuleRow(t, fixed, true, true)).catch(e => {
         saved();   // 這筆已存：畫面先跟上，再報規則失敗
         throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);
       });

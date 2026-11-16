@@ -299,8 +299,8 @@ function autoExclusions(txs, acctTxns, accounts = [], members = [], today = toda
 /* ── 存款轉出的「用途」：預約轉帳（房貸、保險、孝親）與家用帳戶的花費，依用途算成消費 ──
  *  優先序：① exclude_state 排除 ② purpose（手動）③ use: 規則 ④ 摘要像繳卡費 ⑤ 其餘不算（家用帳戶則列待分用途）。 */
 const INVEST_CAT = "📈 投資";
-// 預設算「固定支出」的分類（貸款、保險、學費）；其餘預設＝消費支出。分類不再綁定固定與否：每筆可自己勾（見 fixedInfo）
-const FIXED_CATS = new Set(["🏡 房貸信貸", "🛡️ 保險", "📚 教育"]);
+// 預設算「固定支出」的分類（貸款、保險、學費、孝親）；其餘預設＝消費支出。分類不再綁定固定與否：每筆可自己勾（見 fixedInfo）
+const FIXED_CATS = new Set(["🏡 房貸信貸", "🛡️ 保險", "📚 教育", "🧓 孝親"]);
 const BUCKET_LABEL = { fixed: "固定支出", free: "消費支出", invest: "投資" };
 
 /** 一筆支出的支出性質。優先序：① 這筆自己的 fixed（非 null）② 第一條命中的 fix: 規則（含日期區間）③ 預設（分類屬 FIXED_CATS 才固定）。
@@ -329,7 +329,8 @@ const isFixedTx = (t, ctx) => fixedInfo(t, ctx).bucket === "fixed";
 const bucketLabel = (t, ctx) => BUCKET_LABEL[fixedInfo(t, ctx).bucket];
 const dayOf = v => s(v).slice(0, 10);
 const FIX_ACTION = fixed => (fixed ? "fix:fixed" : "fix:free");
-/** 「之前／往後相同的紀錄也比照」要存的 fix: 規則的日期區間：只勾往後＝date_from＝這筆日期；只勾之前＝date_to；兩個都勾＝不限 */
+/** fix: 規則的日期區間：只往後＝date_from＝這筆日期；只之前＝date_to；兩者＝不限。
+ *  畫面目前只有一個「之前與往後相同的紀錄也比照」（兩者，2026-11-16 醫師要求合併）；單邊的區間留給既有規則與日後需要 */
 const fixRange = (date, before, after) => ({ date_from: after && !before ? dayOf(date) : null, date_to: before && !after ? dayOf(date) : null });
 /** 交易表支出：商家相同（kw＝商家原文 trim；商家空白不能記成規則，呼叫端要先擋） */
 function fixRuleRow(t, fixed, before, after){

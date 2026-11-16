@@ -255,8 +255,8 @@ function spendToggle(root, acc){
   add(root, box, el("p", "note", "例：配偶轉來的家用錢，之後再轉出去繳學費、孝親、日常花費，要一筆一筆分成固定支出或消費支出。"));
 }
 /** 這筆轉出的用途：選分類／不計／跟隨規則；可順手記成規則（同帳戶、同摘要、同金額以後都這樣算）。
- *  也可勾這筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費算固定），
- *  並選擇讓「之前」「往後」相同（同帳戶＋同摘要＋同金額）的轉出也比照，存成帶日期區間的 fix: 規則。 */
+ *  也可勾這筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費、孝親算固定），
+ *  並選擇讓之前與往後相同（同帳戶＋同摘要＋同金額）的轉出也比照，存成不限日期的 fix: 規則。 */
 function purposeDialog(a, acc){
   const f = formDialog("這筆轉出的用途");
   const followed = E.acctUseOf({ ...a, purpose: null }, acc, S.members, S.filterRules);
@@ -273,13 +273,13 @@ function purposeDialog(a, acc){
   const useNow = () => (pick.value === "skip" ? null : pick.value || followed);   // 算成哪一類；null＝不計
   const natOf = () => E.acctFixedInfo(a, acc, S.members, useNow(), S);
   const [fixedBox, fixedChk] = checkbox("固定支出（沒勾＝消費支出）", false);
-  const [beforeBox, beforeChk] = checkbox("之前相同的紀錄也比照", false), [afterBox, afterChk] = checkbox("往後相同的紀錄也比照", false);
+  const [sameBox, sameChk] = checkbox("之前與往後相同的紀錄也比照", false);
   const basis = el("p", "note"), scope = el("div"), natSec = el("div");
-  add(scope, beforeBox, afterBox,
+  add(scope, sameBox,
     el("p", "note", "「相同」＝同帳戶、同摘要、同金額的轉出。若其他筆各自手動勾過，仍以它們自己的為準。"));
   add(natSec, el("b", null, "支出性質"), fixedBox, basis, scope);
   let baseline = false, touched = false;
-  const BASIS = { record: "目前依據：這筆手動設定", rule: "目前依據：規則", default: "目前依據：預設（只有貸款、保險、學費算固定）" };
+  const BASIS = { record: "目前依據：這筆手動設定", rule: "目前依據：規則", default: "目前依據：預設（只有貸款、保險、學費、孝親算固定）" };
   const refresh = () => {
     const use = useNow();
     natSec.hidden = use == null;
@@ -288,9 +288,9 @@ function purposeDialog(a, acc){
     baseline = info.fixed;
     if (!touched) fixedChk.checked = baseline;
     basis.textContent = BASIS[info.by] + (info.by === "rule" && info.rule ? `（${E.filterRuleSummary(info.rule, S.labels)}）` : "");
-    // 之前／往後一直看得到（這筆本來就對、只想讓其他相同的比照，不必先改再改回來）；沒摘要不能記規則
+    // 比照選項一直看得到（這筆本來就對、只想讓其他相同的比照，不必先改再改回來）；沒摘要不能記規則
     scope.hidden = !canRemember;
-    if (scope.hidden){ beforeChk.checked = false; afterChk.checked = false; }
+    if (scope.hidden) sameChk.checked = false;
   };
   const check = f.check = () => { rememberChk.disabled = !pick.value || !canRemember; if (rememberChk.disabled) rememberChk.checked = false; refresh(); };
   pick.addEventListener("change", check);
@@ -305,12 +305,12 @@ function purposeDialog(a, acc){
     // 只有「有算成支出」且勾的和目前判定不同才寫 fixed（不傳＝不動，沒跑 v96 也存得了用途）
     const counted = v !== "skip" && useNow() != null;
     const fixedChanged = counted && fixedChk.checked !== baseline;
-    const before = counted && canRemember && beforeChk.checked, after = counted && canRemember && afterChk.checked;
+    const same = counted && canRemember && sameChk.checked;
     const ok = await f.submit(async () => {
       await Store.setPurpose(a.id, v, fixedChanged ? fixedChk.checked : undefined);
       const rules = [];
       if (v && rememberChk.checked) rules.push(E.useRuleRow(a, acc, v));
-      if (before || after) rules.push(E.acctFixRuleRow(a, acc, fixedChk.checked, before, after));
+      if (same) rules.push(E.acctFixRuleRow(a, acc, fixedChk.checked, true, true));
       for (const row of rules) await Store.addFilterRule(row).catch(e => {
         refreshData();   // 用途已存：畫面先跟上，再報規則失敗
         throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);

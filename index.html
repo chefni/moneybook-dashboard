@@ -43,9 +43,9 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=79eeda344f"></script>
-<script defer src="detail.js?v=a4a56ca6e4"></script>
-<script defer src="accounts.js?v=3f5ce8867a"></script>
+<script defer src="engine.js?v=1bfd075f45"></script>
+<script defer src="detail.js?v=0f2fca43ab"></script>
+<script defer src="accounts.js?v=b2a31cb6d6"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
   :root {
@@ -647,7 +647,7 @@ function paintAnalysis(d, p){
     const pct = v => (v == null ? "—" : `${v}%`);
     root.appendChild(fold("ratio", "📐 四個比例（本期）",
       rt.base > 0 ? `固定支出 ${pct(rt.pct.fixed)} · 消費支出 ${pct(rt.pct.free)} · 投資 ${pct(rt.pct.invest)} · 儲蓄 ${pct(rt.pct.saving)}` : "本期沒有真實收入，算不出比例", b => {
-      add(b, el("p", "note", `各占「真實收入」${nt(rt.base)} 的比例。預設只有貸款、保險、學費算固定支出，其餘算消費支出；每一筆都可以在明細頁點開自己勾（也可讓之前／往後相同的紀錄比照）。存款轉出要先分用途才會算進來。`),
+      add(b, el("p", "note", `各占「真實收入」${nt(rt.base)} 的比例。預設只有貸款、保險、學費、孝親算固定支出，其餘算消費支出；每一筆都可以在明細頁點開自己勾（也可讓之前與往後相同的紀錄比照）。存款轉出要先分用途才會算進來。`),
         row("固定支出", `${nt(rt.fixed)}（${pct(rt.pct.fixed)}）`), row("消費支出", `${nt(rt.free)}（${pct(rt.pct.free)}）`),
         row("投資", `${nt(rt.invest)}（${pct(rt.pct.invest)}）`),
         rt.saving >= 0 ? row("儲蓄", `${nt(rt.saving)}（${pct(rt.pct.saving)}）`, "income")
