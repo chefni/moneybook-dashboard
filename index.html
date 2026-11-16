@@ -43,9 +43,9 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=1bfd075f45"></script>
-<script defer src="detail.js?v=0f2fca43ab"></script>
-<script defer src="accounts.js?v=b2a31cb6d6"></script>
+<script defer src="engine.js?v=37ee65d617"></script>
+<script defer src="detail.js?v=8c73c26d53"></script>
+<script defer src="accounts.js?v=acd02d3ee1"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
   :root {
@@ -110,6 +110,9 @@
   .fold > .body { padding:0 16px 14px; }
   .row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; padding:6px 0; font-size:14px; }
   .row b { font-size:16px; }
+  .row.drill { width:100%; background:none; border:0; border-radius:8px; color:inherit; font:inherit; text-align:left; cursor:pointer; min-height:40px; }
+  .row.drill > span::after { content:" ›"; color:var(--sub); }
+  .row.drill:active { background:var(--line); }
   .hr { border-top:1px solid var(--line); margin:2px 0; }
   .note { color:var(--sub); font-size:12px; margin:2px 0 8px; }
 
@@ -165,7 +168,13 @@
   .dlg h3 { padding:16px 16px 6px; font-size:17px; }
   .dlg h4 { margin:14px 0 4px; font-size:14px; }
   .dbody { padding:0 16px; overflow-y:auto; max-height:calc(85vh - 110px); display:flex; flex-direction:column; gap:6px; }
-  .dbody input:not([type=date]) { width:100%; }
+  .dbody input:not([type=date]):not([type=checkbox]):not([type=radio]) { width:100%; }   /* 勾選框別被撐成整列寬（手機上框跑到中間、字被擠到右邊） */
+  .same { display:grid; gap:8px; padding:10px; margin:2px 0 6px; border:1px solid var(--line); border-radius:10px; }
+  .same .rng { display:grid; grid-template-columns:1fr auto 1fr; gap:6px; align-items:center; }
+  .same .rng input { min-height:40px; }
+  .same .hits { display:grid; gap:2px; font-size:13px; }
+  .same .hits div { display:flex; justify-content:space-between; gap:8px; border-top:1px solid var(--line); padding-top:4px; }
+  .same .hits span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .dfoot { padding:10px 16px 14px; text-align:right; }
   .rowx { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .dfoot .warn { text-align:left; margin-bottom:8px; }
@@ -543,6 +552,31 @@ function fold(key, title, summary, body){
 function row(label, value, cls){
   return add(el("div", "row"), el("span", null, label), el("b", cls || null, value));
 }
+/** 可點的一列（📐 四個比例）：點開列出這一桶的紀錄；沒有紀錄就是一般列 */
+function drillRow(label, value, list){
+  if (!list.length) return row(label, value);
+  const b = add(el("button", "row drill"), el("span", null, `${label}（${list.length} 筆）`), el("b", null, value));
+  b.addEventListener("click", () => drillDialog(label, list));
+  return b;
+}
+/** 一桶的紀錄清單：點一筆就開它平常的編輯畫面（刷卡＝編輯這筆、存款轉出＝這筆轉出的用途） */
+function drillDialog(label, list){
+  const { d, body } = dialog(`${label}（${list.length} 筆，${nt(list.reduce((a, t) => a + t.amount, 0))}）`);
+  body.appendChild(el("p", "note", "金額大的在前。點一筆可改它的分類或固定／消費。"));
+  for (const t of list){
+    const cat = E.labelOf(E.classifyF(t, S.catRules, S.filterRules, S.cats), S.labels);
+    const btn = add(el("button", "main"),
+      add(el("span", "m"), el("span", null, t.merchant || t.note || "（無名稱）"),
+          el("small", null, `${t.occurred_at} · ${cat} · ${E.statSource(t)}${t.fromAcct ? "（存款轉出）" : ""}`)),
+      el("span", "a expense", nt(t.amount)));
+    btn.addEventListener("click", () => {
+      d.close();
+      if (t.fromAcct) purposeDialog(t.raw, S.accounts.find(a => a.id === t.raw.account_id));
+      else editTx(t, { ex: false, rule: E.txExclusionFilter(t, S.filterRules) });
+    });
+    body.appendChild(add(el("div", "li"), btn));
+  }
+}
 function sbar(label, amount, max, total, opts = {}){
   const w = el("div", "sbar");
   add(w, add(el("div", "lbl"), el("span", null, label),
@@ -648,8 +682,9 @@ function paintAnalysis(d, p){
     root.appendChild(fold("ratio", "📐 四個比例（本期）",
       rt.base > 0 ? `固定支出 ${pct(rt.pct.fixed)} · 消費支出 ${pct(rt.pct.free)} · 投資 ${pct(rt.pct.invest)} · 儲蓄 ${pct(rt.pct.saving)}` : "本期沒有真實收入，算不出比例", b => {
       add(b, el("p", "note", `各占「真實收入」${nt(rt.base)} 的比例。預設只有貸款、保險、學費、孝親算固定支出，其餘算消費支出；每一筆都可以在明細頁點開自己勾（也可讓之前與往後相同的紀錄比照）。存款轉出要先分用途才會算進來。`),
-        row("固定支出", `${nt(rt.fixed)}（${pct(rt.pct.fixed)}）`), row("消費支出", `${nt(rt.free)}（${pct(rt.pct.free)}）`),
-        row("投資", `${nt(rt.invest)}（${pct(rt.pct.invest)}）`),
+        drillRow("固定支出", `${nt(rt.fixed)}（${pct(rt.pct.fixed)}）`, rt.rows.fixed),
+        drillRow("消費支出", `${nt(rt.free)}（${pct(rt.pct.free)}）`, rt.rows.free),
+        drillRow("投資", `${nt(rt.invest)}（${pct(rt.pct.invest)}）`, rt.rows.invest),
         rt.saving >= 0 ? row("儲蓄", `${nt(rt.saving)}（${pct(rt.pct.saving)}）`, "income")
                        : row("動用存款", nt(-rt.saving), "expense"));
       if (rt.pending.n){
@@ -1202,6 +1237,18 @@ const LiveStore = {
     .order("snapshot_date", { ascending: false })),
   acctTxns: id => pagedFetch(() => sb.from("account_transactions").select("*").eq("account_id", id)
     .order("occurred_at", { ascending: false })),
+  /** 「相同的紀錄」預覽：全部月份、不重複的支出，商家或備註含 kw（金額區間可不給）；呼叫端再用規則本身比一次 */
+  sameExpenses: (kw, min, max) => {
+    const s = kw.replace(/[,()*%"\\]/g, "").trim();   // PostgREST or() 的語法字元一律拿掉（同 search）
+    if (!s) return Promise.resolve([]);
+    return pagedFetch(() => {
+      let q = sb.from("transactions").select("*").eq("household_id", hid).eq("kind", "expense").eq("dedup_status", "unique")
+        .or(`merchant.ilike.*${s}*,note.ilike.*${s}*`);
+      if (min != null) q = q.gte("amount", min);
+      if (max != null) q = q.lte("amount", max);
+      return q.order("occurred_at", { ascending: false });   // pagedFetch 會補 id 當尾鍵
+    });
+  },
   /** 全部帳戶在 [from, to) 的流水（帳戶頁判斷家用帳戶的轉出是不是自家互轉） */
   acctTxnsRange: (from, to) => (S.accounts.length ? pagedFetch(() => sb.from("account_transactions").select("*")
     .in("account_id", S.accounts.map(a => a.id)).gte("occurred_at", from).lt("occurred_at", to)
@@ -1558,7 +1605,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=3de9b1ffe7";
+    d.src = "demo.js?v=cc8534496b";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);

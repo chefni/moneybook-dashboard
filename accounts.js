@@ -272,12 +272,11 @@ function purposeDialog(a, acc){
   // ── 支出性質（固定支出／消費支出）：選「不計」時整區隱藏 ──
   const useNow = () => (pick.value === "skip" ? null : pick.value || followed);   // 算成哪一類；null＝不計
   const natOf = () => E.acctFixedInfo(a, acc, S.members, useNow(), S);
-  const [fixedBox, fixedChk] = checkbox("固定支出（沒勾＝消費支出）", false);
-  const [sameBox, sameChk] = checkbox("之前與往後相同的紀錄也比照", false);
-  const basis = el("p", "note"), scope = el("div"), natSec = el("div");
-  add(scope, sameBox,
-    el("p", "note", "「相同」＝同帳戶、同摘要、同金額的轉出。若其他筆各自手動勾過，仍以它們自己的為準。"));
-  add(natSec, el("b", null, "支出性質"), fixedBox, basis, scope);
+  const [fixedBox, fixedChk] = checkbox("這筆是固定支出（沒勾＝消費支出）", false);
+  // 相同＝同帳戶＋摘要含關鍵字＋（預設）同金額；可先找找看有幾筆（sameBox，detail.js）
+  const same = sameBox({ selfId: a.id, kw: a.description || "", amount: a.amount, acc });
+  const basis = el("p", "note"), natSec = el("div", "dsec");
+  add(natSec, el("b", null, "支出性質"), basis, fixedBox, same.box);
   let baseline = false, touched = false;
   const BASIS = { record: "目前依據：這筆手動設定", rule: "目前依據：規則", default: "目前依據：預設（只有貸款、保險、學費、孝親算固定）" };
   const refresh = () => {
@@ -288,9 +287,6 @@ function purposeDialog(a, acc){
     baseline = info.fixed;
     if (!touched) fixedChk.checked = baseline;
     basis.textContent = BASIS[info.by] + (info.by === "rule" && info.rule ? `（${E.filterRuleSummary(info.rule, S.labels)}）` : "");
-    // 比照選項一直看得到（這筆本來就對、只想讓其他相同的比照，不必先改再改回來）；沒摘要不能記規則
-    scope.hidden = !canRemember;
-    if (scope.hidden) sameChk.checked = false;
   };
   const check = f.check = () => { rememberChk.disabled = !pick.value || !canRemember; if (rememberChk.disabled) rememberChk.checked = false; refresh(); };
   pick.addEventListener("change", check);
@@ -305,12 +301,12 @@ function purposeDialog(a, acc){
     // 只有「有算成支出」且勾的和目前判定不同才寫 fixed（不傳＝不動，沒跑 v96 也存得了用途）
     const counted = v !== "skip" && useNow() != null;
     const fixedChanged = counted && fixedChk.checked !== baseline;
-    const same = counted && canRemember && sameChk.checked;
     const ok = await f.submit(async () => {
+      const fixRow = counted && same.on() ? same.rule(fixedChk.checked) : null;   // 條件不完整先擋（還沒寫任何東西）
       await Store.setPurpose(a.id, v, fixedChanged ? fixedChk.checked : undefined);
       const rules = [];
       if (v && rememberChk.checked) rules.push(E.useRuleRow(a, acc, v));
-      if (same) rules.push(E.acctFixRuleRow(a, acc, fixedChk.checked, true, true));
+      if (fixRow) rules.push(fixRow);
       for (const row of rules) await Store.addFilterRule(row).catch(e => {
         refreshData();   // 用途已存：畫面先跟上，再報規則失敗
         throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);

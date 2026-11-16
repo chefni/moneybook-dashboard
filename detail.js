@@ -367,8 +367,9 @@ function editTx(t, st){
 }
 
 /** 支出性質：這一筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費、孝親算固定，分類不再綁定）。
- *  值有改才寫這一筆的 transactions.fixed；勾「之前與往後相同的紀錄也比照」＝存一條不限日期的 fix: 規則。
- *  其他筆若各自手動勾過，仍以它們自己的為準（優先序：紀錄 ＞ 規則 ＞ 預設）。📈 投資的支出不分固定／消費。 */
+ *  值有改才寫這一筆的 transactions.fixed；勾「之前與往後相同的紀錄也比照」＝存一條不限日期的 fix: 規則
+ *  （相同＝商家含關鍵字＋可選金額範圍，見 sameBox）。其他筆若各自手動勾過，仍以它們自己的為準
+ *  （優先序：紀錄 ＞ 規則 ＞ 預設）。📈 投資的支出不分固定／消費。 */
 function natureSection(t, d){
   const info = E.fixedInfo(t, S);
   const sec = el("details", "dsec"), err = el("p", "warn");
@@ -376,26 +377,21 @@ function natureSection(t, d){
   sec.open = true;
   const BASIS = { record: "這筆手動設定", rule: "規則", default: "預設" };
   const cur = () => `${info.fixed ? "固定支出" : "消費支出"}（${BASIS[info.by]}）`;
-  const [box, chk] = checkbox("固定支出（沒勾＝消費支出）", info.fixed);
-  const [sameBox, sameChk] = checkbox("之前與往後相同的紀錄也比照", false);
-  const save = el("button", "primary", "儲存支出性質"), scope = el("div");
-  // 商家空白不能記成規則（同分類的商家規則）：只能改這一筆
-  const canRule = String(t.merchant || "").trim() !== "";
-  add(scope, canRule ? sameBox : null,
-    el("p", "note", canRule ? `「相同」＝商家是「${String(t.merchant).trim()}」的支出。若其他筆各自手動勾過，仍以它們自己的為準。`
-                            : "這筆沒有商家名，無法比照相同的紀錄；可用上面的「✏️ 編輯」補上名稱。"));
+  const [box, chk] = checkbox("這筆是固定支出（沒勾＝消費支出）", info.fixed);
+  const save = el("button", "primary", "儲存支出性質");
   // 比照選項一直看得到：這筆本來就對、只想讓其他相同紀錄比照時，不必先改一次再改回來
-  const check = () => { save.hidden = chk.checked === info.fixed && !(canRule && sameChk.checked); };
-  for (const c of [chk, sameChk]) c.addEventListener("change", check);
+  const check = () => { save.hidden = chk.checked === info.fixed && !same.on(); };
+  const same = sameBox({ selfId: t.id, kw: t.merchant || t.note || "", amount: t.amount, onChange: check });
+  chk.addEventListener("change", check);
   const rule = info.rule ? `；規則：${E.filterRuleSummary(info.rule, S.labels)}` : "";
-  add(sec, add(el("summary", null, "支出性質"), el("small", null, `目前：${cur()}${rule}`)), box, scope, save, err);
+  add(sec, add(el("summary", null, "支出性質"), el("small", null, `目前：${cur()}${rule}`)), box, same.box, save, err);
   check();
   save.addEventListener("click", async () => {
-    const same = canRule && sameChk.checked;
     const fixed = chk.checked;
-    const ok = await busy([save, chk, sameChk], err, async () => {
+    const ok = await busy([save, chk], err, async () => {
+      const row = same.on() ? same.rule(fixed) : null;   // 條件不完整先擋（還沒寫任何東西）
       if (fixed !== info.fixed) await Store.updateTx(t.id, { fixed });
-      if (same) await Store.addFilterRule(E.fixRuleRow(t, fixed, true, true)).catch(e => {
+      if (row) await Store.addFilterRule(row).catch(e => {
         saved();   // 這筆已存：畫面先跟上，再報規則失敗
         throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);
       });
@@ -403,6 +399,78 @@ function natureSection(t, d){
     if (ok){ d.close(); saved(); }
   });
   return sec;
+}
+
+/** 「之前與往後相同的紀錄也比照」（明細頁支出與存款轉出共用）。
+ *  相同＝商家／摘要含關鍵字（預填這筆的，可改）＋可選的金額範圍；存款轉出另限同一個帳戶。
+ *  填好可先按「找相同的紀錄」看會影響哪些、幾筆，再決定存不存（用要存的那條規則本身去比，結果與之後的判定一致）。
+ *  o：{ selfId（這筆的 id）, kw, amount, acc（存款轉出才給）, onChange }。回傳 { box, on(), rule(fixed) }；rule 在條件不完整時丟錯（訊息給使用者看）。 */
+function sameBox(o){
+  const [toggle, chk] = checkbox("之前與往後相同的紀錄也比照", false);
+  const kw = el("input"); kw.value = String(o.kw || "").trim(); kw.placeholder = o.acc ? "摘要的關鍵字" : "商家的關鍵字";
+  const amt = Math.abs(Number(o.amount) || 0);
+  const [limBox, limChk] = checkbox("限定金額範圍", !!o.acc);   // 存款轉出摘要常是「網銀預約」這種通用字：預設連金額一起比
+  const lo = el("input"), hi = el("input");
+  lo.inputMode = hi.inputMode = "numeric"; lo.placeholder = "最低"; hi.placeholder = "最高";
+  lo.value = String(Math.floor(amt)); hi.value = String(Math.ceil(amt));
+  const rng = add(el("div", "rng"), lo, el("span", null, "～"), hi);
+  const find = el("button", null, "🔍 找相同的紀錄"), msg = el("p", "note"), hits = el("div", "hits");
+  const panel = add(el("div", "same"), field(o.acc ? "摘要含" : "商家含", kw),
+    o.acc ? el("p", "note", `限同一個帳戶：${E.accountDisplay(o.acc, S.members)}`) : null,
+    limBox, rng, find, msg, hits,
+    el("p", "note", "其他筆若各自手動勾過，仍以它們自己的為準。"));
+  const stale = () => { msg.textContent = ""; hits.replaceChildren(); };
+  const sync = (notify = true) => { panel.hidden = !chk.checked; rng.hidden = !limChk.checked; if (notify && o.onChange) o.onChange(); };
+  chk.addEventListener("change", sync);
+  limChk.addEventListener("change", () => { stale(); sync(); });
+  for (const i of [kw, lo, hi]) i.addEventListener("input", stale);
+
+  const num = v => (String(v).trim() === "" ? null : E.parseAmount(String(v).replace(/,/g, "")));
+  function rule(fixed){
+    const k = kw.value.trim();
+    if (!k) throw new Error(`請填${o.acc ? "摘要" : "商家"}的關鍵字`);
+    let min = null, max = null;
+    if (limChk.checked){
+      min = num(lo.value); max = num(hi.value);
+      if ((lo.value.trim() && min == null) || (hi.value.trim() && max == null)) throw new Error("金額請填正整數");
+      if (min == null && max == null) throw new Error("勾了限定金額，請至少填一邊");
+      if (min != null && max != null && min > max) throw new Error("金額下限不能大於上限");
+    }
+    return { name: `支出性質：${k}`, priority: 100, kw: k, account: o.acc ? E.acctRuleKey(o.acc) : "",
+             amount_min: min, amount_max: max, direction: "expense", action: fixed ? "fix:fixed" : "fix:free",
+             date_from: null, date_to: null };
+  }
+  find.addEventListener("click", async () => {
+    stale();
+    let r;
+    try { r = rule(true); } catch (e){ msg.textContent = e.message; return; }
+    msg.textContent = "搜尋中…"; find.disabled = true;
+    try {
+      let list;
+      if (o.acc){
+        const src = E.acctRuleSource(o.acc, S.members);
+        list = (await Store.acctTxns(o.acc.id)).filter(a => Number(a.amount) < 0 &&
+          E.matchFilterRule(a.description, a.note, src, Math.abs(a.amount), "expense", [r], "fix", a.occurred_at))
+          .map(a => ({ id: a.id, date: a.occurred_at, name: a.description || "（無摘要）", amount: Math.abs(Number(a.amount)) }));
+      } else {
+        list = (await Store.sameExpenses(r.kw, r.amount_min, r.amount_max)).filter(t =>
+          E.matchFilterRule(t.merchant, t.note, E.statSource(t), t.amount, "expense", [r], "fix", t.occurred_at))
+          .map(t => ({ id: t.id, date: t.occurred_at, name: t.merchant || t.note || "（無名稱）", amount: t.amount }));
+      }
+      list.sort((a, b) => b.date.localeCompare(a.date));
+      const total = list.reduce((s, x) => s + x.amount, 0);
+      const self = list.some(x => x.id === o.selfId) ? "含這筆" : "⚠️ 這筆本身不在條件內";
+      msg.textContent = list.length
+        ? `找到 ${list.length} 筆（${self}），共 ${nt(total)}；${list[list.length - 1].date.slice(0, 10)} ～ ${list[0].date.slice(0, 10)}`
+        : "找不到符合的紀錄：條件可能太嚴，這樣存的話連這筆都對不上";
+      for (const x of list.slice(0, 12))
+        hits.appendChild(add(el("div"), el("span", null, `${x.date.slice(0, 10)} ${x.name}`), el("span", null, nt(x.amount))));
+      if (list.length > 12) hits.appendChild(el("p", "note", `…還有 ${list.length - 12} 筆`));
+    } catch (e){ msg.textContent = "搜尋失敗：" + plainError(e); }
+    finally { find.disabled = false; }
+  });
+  sync(false);   // 建構當下呼叫端還拿不到回傳值，不回呼
+  return { box: add(el("div"), toggle, panel), on: () => chk.checked, rule };
 }
 
 /** ✈️ 行程歸屬（App v78）：只影響「這趟花多少」，與「不納入收支」是兩回事。有行程才出現。 */

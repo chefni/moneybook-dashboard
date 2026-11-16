@@ -50,6 +50,9 @@ const DemoStore = {
 
   snapshots: async ids => DEMO_DATA.snaps.filter(x => ids.includes(x.account_id)),
   acctTxns: async id => DEMO_DATA.acct.filter(a => a.account_id === id).sort(newestFirst()),
+  sameExpenses: async (kw, min, max) => DEMO_DATA.txs.filter(t => t.kind === "expense" && t.dedup_status === "unique" &&
+    (t.merchant + " " + t.note).toLowerCase().includes(kw.trim().toLowerCase()) &&
+    (min == null || t.amount >= min) && (max == null || t.amount <= max)).sort(newestFirst()),
   acctTxnsRange: async (from, to) => DEMO_DATA.acct.filter(a => a.occurred_at >= from && a.occurred_at < to).sort(newestFirst()),
   setSnapshot: async (account_id, balance, cost, snapshot_date) => {
     DEMO_DATA.snaps = DEMO_DATA.snaps.filter(x => !(x.account_id === account_id && x.snapshot_date === snapshot_date));

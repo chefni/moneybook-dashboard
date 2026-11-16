@@ -749,6 +749,13 @@ test("ratios 逐筆計算：同分類兩筆一固定一消費要分開算、📈
   eq([r.fixed, r.free, r.invest, r.saving], [36000, 4000, 25000, 100000 - 45000 - 20000], "同是保險：6000 固定、4000 消費；投資另算");
   eq(r.pct, { fixed: 36, free: 4, invest: 25, saving: 35 }); eq(r.pending, { n: 2, sum: 500 });
   eq(E.financeRatios(rows, ctx0, 0, 45000, 0, []).pct, { fixed: null, free: null, invest: null, saving: null });
+  // 點進去看明細：每桶的紀錄（含買入投資），金額大的在前
+  const buy = tx("b", 20000, "2026-02-03", "invest", "買 0050");
+  const rr = E.financeRatios(rows, ctx0, 100000, 45000, 20000, [], [buy]).rows;
+  eq(Object.fromEntries(Object.entries(rr).map(([k, v]) => [k, v.map(t => t.amount)])),
+     { fixed: rows.filter(t => E.fixedInfo(t, ctx0).bucket === "fixed").map(t => t.amount).sort((a, b) => b - a),
+       free: rows.filter(t => E.fixedInfo(t, ctx0).bucket === "free").map(t => t.amount).sort((a, b) => b - a),
+       invest: [20000, ...rows.filter(t => E.fixedInfo(t, ctx0).bucket === "invest").map(t => t.amount)].sort((a, b) => b - a) });
   eq(E.financeRatios([{ ...ex("e", 9000, "飯"), forcedCat: "🍜 飲食" }], ctx0, 5000, 9000, 0, []).saving, -4000, "儲蓄為負＝動用存款");
   eq(E.financeRatios([ex("f", 70, "全聯")], { ...ctx0, filterRules: [filter("fix:fixed", { kw: "全聯" })] }, 1000, 70, 0, []).fixed, 70, "規則也生效");
 });

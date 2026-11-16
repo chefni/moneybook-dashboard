@@ -578,7 +578,8 @@ function analyze(d, period, sel, today = todayIso()){
   const realInc = Math.max(0, ti - catAmt(incByCat, "📊 賣出"));
   const passive = catAmt(incByCat, "🏦 利息") + catAmt(incByCat, "💹 配息");
   const kdiv = (a, b) => Math.trunc(a / b);   // Kotlin Int 除法（向零取整）
-  const ratios = financeRatios(exp, d, realInc, te, investIn, spendIn(spends.pending, mStart, mNext));
+  const ratios = financeRatios(exp, d, realInc, te, investIn, spendIn(spends.pending, mStart, mNext),
+    investTxs.filter(t => !isInvestSell(t)));
   const fin = { realInc, consumption: te, investIn, investOut, passive,
     savingRate: realInc > 0 ? kdiv((realInc - te) * 100, realInc) : null,
     investRate: realInc > 0 ? kdiv(investIn * 100, realInc) : null };
@@ -598,12 +599,16 @@ function analyze(d, period, sel, today = todayIso()){
 /** 📐 四個比例：固定支出／消費支出／投資／儲蓄各占真實收入幾 %。逐筆判桶（fixedInfo），同分類的兩筆可以一固定一消費。
  *  投資＝買入投資＋分類為 📈 投資的支出（後者已在 te 裡，所以儲蓄＝收入−te−買入投資 不會重複扣）。收入≤0 時百分比為 null。
  *  exp＝本期算進來的支出列（含存款轉出的偽支出）；ctx＝{ catRules, filterRules, cats }。 */
-function financeRatios(exp, ctx, base, te, investIn, pendingRows){
+function financeRatios(exp, ctx, base, te, investIn, pendingRows, investRows = []){
   const bucket = Object.fromEntries(Object.keys(BUCKET_LABEL).map(k => [k, 0]));
-  for (const t of exp) bucket[fixedInfo(t, ctx).bucket] += t.amount;
+  // 每一桶的紀錄（卡片點進去看明細）：金額大的在前
+  const rows = Object.fromEntries(Object.keys(BUCKET_LABEL).map(k => [k, []]));
+  for (const t of exp){ const b = fixedInfo(t, ctx).bucket; bucket[b] += t.amount; rows[b].push(t); }
+  rows.invest.push(...investRows);   // 投資＝📈 分類的支出＋買入投資
+  for (const k in rows) rows[k].sort((a, b) => b.amount - a.amount || s(b.occurred_at).localeCompare(s(a.occurred_at)));
   const invest = investIn + bucket.invest, saving = base - te - investIn;
   const pct = v => (base > 0 ? Math.round(v * 100 / base) : null);
-  return { base, fixed: bucket.fixed, free: bucket.free, invest, saving,
+  return { base, fixed: bucket.fixed, free: bucket.free, invest, saving, rows,
     pct: { fixed: pct(bucket.fixed), free: pct(bucket.free), invest: pct(invest), saving: pct(saving) },
     pending: { n: pendingRows.length, sum: pendingRows.reduce((a, r) => a + r.amount, 0) } };
 }
@@ -1005,7 +1010,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
   normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
-  INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, acctSpends, acctUseOf, acctRuleKey, useRuleRow, financeRatios, missingBuiltins,
+  INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, acctSpends, acctUseOf, acctRuleKey, acctRuleSource, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;
