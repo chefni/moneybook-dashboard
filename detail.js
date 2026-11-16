@@ -193,7 +193,9 @@ function catChart(b, v){
 function subLine(r, text){
   const sm = el("small");
   if (!r.ex && r.nat && r.nat.bucket === "fixed") sm.appendChild(el("span", "tag", "固定"));
-  sm.appendChild(document.createTextNode(text));
+  const a = r.t && r.t.amort;
+  if (a) sm.appendChild(el("span", "tag", `攤提 ${a.k}/${a.N}`));
+  sm.appendChild(document.createTextNode(text + (a ? ` · 原 ${nt(a.total)}（${a.src.occurred_at.slice(0, 7)} 付）` : "")));
   return sm;
 }
 /** 支出單列（App ExpenseTxRow）：未計灰字刪除線＋白話原因；疑似重複可就地確認 */
@@ -373,6 +375,8 @@ function exportCsv(){
 /** st＝呼叫端那一列的判定 { ex, why, rule }（收入列用收入的規則判定，跟清單上看到的一致）。
  *  沒給（搜尋結果）就用本期的判定；不在本期的那筆，自動偵測（互轉、退款）要看那個月才算得出來。 */
 function editTx(t, st){
+  // 攤提的分片（金額是一個月份、id 可能是「原id#a…」）：一律改開原紀錄，免得把分片金額存回去
+  if (t.amort) t = t.amort.src;
   const p = lastPeriod, inPeriod = p && t.occurred_at >= E.Period.startDate(p) && t.occurred_at < E.Period.endExclusive(p);
   const [exNow] = st ? [st.ex] : DV.v.txExc(t);
   const rule = st ? st.rule : E.txExclusionFilter(t, S.filterRules);
@@ -391,7 +395,85 @@ function editTx(t, st){
   });
   del.addEventListener("click", () => { d.close(); deleteDialog(t); });
   add(body, edit, add(el("div", "rowx"), exc, del));
-  if (t.kind === "expense"){ body.appendChild(natureSection(t, d)); body.appendChild(tripSection(t)); body.appendChild(categorySection(t, d)); }
+  if (t.kind === "expense"){
+    body.appendChild(natureSection(t, d)); body.appendChild(amortSection(t, d));
+    body.appendChild(tripSection(t)); body.appendChild(categorySection(t, d));
+  }
+}
+
+/** 攤提：大額一次付（年繳保費、學費…）在統計上平均分到一段期間的每個月，總額不變。
+ *  期間自己選起訖月份（預設付款月起往後 12 個月：每個月當下就看得到這筆的一份）；也有「往前一年」捷徑（先存錢、到期才付）。
+ *  寫這筆的 transactions.amortize（月數；改回不攤且規則會攤時寫 1）＋amortize_offset（起始月相對付款月）；
+ *  勾比照＝存 amort: 規則（存的是相對付款月的位移，明年同商家的扣款自動照同樣方式攤）。 */
+function amortSection(t, d){
+  const info = E.amortInfo(t, S.filterRules);
+  const sec = el("details", "dsec"), err = el("p", "warn");
+  sec.open = info.n !== 0;
+  const BASIS = { record: "這筆手動設定", rule: "規則", none: "預設" };
+  const pay = E.amortMonth(t, 0), idx = ym => { const [y, m] = ym.split("-").map(Number); return y * 12 + m - 1; };
+  const [onBox, on] = checkbox("攤提這筆（平均分到下面期間的每個月）", info.n !== 0);
+  const from = el("input"), to = el("input");
+  from.type = to.type = "month";
+  const setRange = (n, off) => { from.value = E.amortMonth(t, off); to.value = E.amortMonth(t, off + n - 1); };
+  setRange(info.n || 12, info.n ? info.off : 0);   // 預設：付款月起往後一年
+  const fwd = el("button", null, "往後一年"), back = el("button", null, "往前一年");
+  fwd.title = "付款月起往後 12 個月"; back.title = "往前 12 個月，到付款月為止";
+  fwd.addEventListener("click", () => { setRange(12, 0); check(); });
+  back.addEventListener("click", () => { setRange(12, -11); check(); });
+  // 起訖並排、兩個捷徑並排（對話框的輸入框預設整行寬，這裡改成平分一行）
+  const line = (...xs) => { const r = add(el("div"), ...xs); r.style.cssText = "display:flex;align-items:center;gap:6px;margin:6px 0"; return r; };
+  for (const x of [from, to, fwd, back]){ x.style.flex = "1"; x.style.minWidth = "0"; }
+  const rng = add(el("div"), line(from, el("span", null, "～"), to), line(fwd, back));
+  const preview = el("p", "note"), save = el("button", "primary", "儲存攤提");
+  /** 選的設定 { n, off }（不攤＝n 0）；區間不合法丟錯 */
+  const want = () => {
+    if (!on.checked) return { n: 0, off: 0 };
+    if (!/^\d{4}-\d{2}$/.test(from.value) || !/^\d{4}-\d{2}$/.test(to.value)) throw new Error("請選起訖月份");
+    const n = idx(to.value) - idx(from.value) + 1, off = idx(from.value) - idx(pay);
+    if (n < 2) throw new Error("結束月份要比開始月份晚（至少 2 個月）");
+    if (n > E.AMORT_MAX) throw new Error(`最多攤 ${E.AMORT_MAX} 個月`);
+    if (Math.abs(off) > E.AMORT_MAX) throw new Error(`開始月份離付款月（${pay}）太遠`);
+    return { n, off };
+  };
+  const check = () => {
+    rng.hidden = !on.checked;
+    let w = null;
+    try { w = want(); } catch (e){ preview.textContent = e.message; }
+    if (w){
+      if (!w.n) preview.textContent = "照實際付款那天整筆算。";
+      else {
+        const per = Math.floor(t.amount / w.n);
+        const outside = w.off > 0 || w.off + w.n - 1 < 0 ? "（付款月本身不在期間內，那個月不算）" : "";
+        preview.textContent = `共 ${w.n} 個月，每月約 ${nt(per)}；總額仍是 ${nt(t.amount)}${outside}。` +
+          (w.off < 0 ? "付款月之前的月份要等這筆入帳後才會補上。" : "");
+      }
+    }
+    save.hidden = !same.on() && !!w && w.n === info.n && (w.n === 0 || w.off === info.off);
+  };
+  const same = sameBox({ selfId: t.id, kw: t.merchant || t.note || "", amount: t.amount, onChange: check });
+  on.addEventListener("change", check);
+  for (const i of [from, to]) i.addEventListener("input", check);
+  const rule = info.rule ? `；規則：${E.filterRuleSummary(info.rule, S.labels)}` : "";
+  add(sec, add(el("summary", null, "攤提"), el("small", null, `目前：${E.amortLabel(info.n, info.off, t)}（${BASIS[info.by]}）${rule}`)),
+    el("p", "note", `例：年繳保費一次刷 6 萬，攤 12 個月＝每個月算 5,000。只改統計上算在哪幾個月，總額不變。這筆在 ${pay} 付款。`),
+    onBox, rng, preview, same.box, save, err);
+  check();
+  save.addEventListener("click", async () => {
+    const ok = await busy([save, on, from, to], err, async () => {
+      const w = want();
+      const row = same.on() ? same.rule(E.amortAction(w.n, w.off)) : null;   // 條件不完整先擋
+      const changed = w.n !== info.n || (w.n && w.off !== info.off);
+      // 改回不攤：規則會攤的話要明寫 1 擋住規則；否則清回 null（跟規則）
+      if (changed) await Store.updateTx(t.id, w.n ? { amortize: w.n, amortize_offset: w.off }
+                                                  : { amortize: info.by === "rule" ? 1 : null, amortize_offset: null });
+      if (row) await Store.addFilterRule(row).catch(e => {
+        saved();
+        throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);
+      });
+    });
+    if (ok){ d.close(); saved(); }
+  });
+  return sec;
 }
 
 /** 支出性質：這一筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費、孝親算固定，分類不再綁定）。
@@ -454,7 +536,9 @@ function sameBox(o){
   for (const i of [kw, lo, hi]) i.addEventListener("input", stale);
 
   const num = v => (String(v).trim() === "" ? null : E.parseAmount(String(v).replace(/,/g, "")));
-  function rule(fixed){
+  /** x：true/false＝支出性質（fix:fixed／fix:free）；字串＝直接當 action（例：amort:-12） */
+  function rule(x){
+    const action = typeof x === "string" ? x : x ? "fix:fixed" : "fix:free";
     const k = kw.value.trim();
     if (!k) throw new Error(`請填${o.acc ? "摘要" : "商家"}的關鍵字`);
     let min = null, max = null;
@@ -464,8 +548,8 @@ function sameBox(o){
       if (min == null && max == null) throw new Error("勾了限定金額，請至少填一邊");
       if (min != null && max != null && min > max) throw new Error("金額下限不能大於上限");
     }
-    return { name: `支出性質：${k}`, priority: 100, kw: k, account: o.acc ? E.acctRuleKey(o.acc) : "",
-             amount_min: min, amount_max: max, direction: "expense", action: fixed ? "fix:fixed" : "fix:free",
+    return { name: `${action.startsWith("amort:") ? "攤提" : "支出性質"}：${k}`, priority: 100, kw: k, account: o.acc ? E.acctRuleKey(o.acc) : "",
+             amount_min: min, amount_max: max, direction: "expense", action,
              date_from: null, date_to: null };
   }
   find.addEventListener("click", async () => {

@@ -149,10 +149,11 @@ function demoPeriod(p){
   const inR = (x, s, e) => x.occurred_at >= s && x.occurred_at < e;
   const live = DEMO_DATA.txs.filter(t => t.dedup_status !== "merged"), uniq = live.filter(t => t.dedup_status === "unique");
   const txsAll = live.filter(t => inR(t, a, b));
-  return { txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"),
-           prevTxs: uniq.filter(t => inR(t, E.Period.startDate(pv), E.Period.endExclusive(pv))),
-           range6: uniq.filter(t => inR(t, `${y5}-${pad(m5)}-01`, `${y1}-${pad(m1)}-01`)),
-           acctTxnsWide: DEMO_DATA.acct.filter(t => inR(t, ...E.Period.acctWindow(p))) };
+  const d = { txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"),
+              prevTxs: uniq.filter(t => inR(t, E.Period.startDate(pv), E.Period.endExclusive(pv))),
+              range6: uniq.filter(t => inR(t, `${y5}-${pad(m5)}-01`, `${y1}-${pad(m1)}-01`)),
+              acctTxnsWide: DEMO_DATA.acct.filter(t => inR(t, ...E.Period.acctWindow(p))) };
+  return E.amortizePeriod(d, p, uniq, S.filterRules);   // 示範資料全在記憶體：整份當攤提來源
 }
 function buildDemo(){
   uid = "u1";   // 示範登入者＝爸爸（記一筆預設算他的）
@@ -216,6 +217,8 @@ function buildDemo(){
       T(4, 2300, "示範保險費", "m1", "expense", "[email] 示範信用卡(爸爸)", { fixed: false });
       T(5, 1099, "示範網路費", "m2", "expense", "[email] 示範銀行卡(媽媽)", { fixed: true });
     }
+    // 年繳保費（兩個月前刷卡一次 36,000）攤提：付款月起往後 12 個月，每月各算 3,000（本月、上月都看得到一份）
+    if (k === 2) T(3, 36000, "示範人壽年繳保費", "m1", "expense", "[email] 示範信用卡(爸爸)", { amortize: 12, amortize_offset: 0 });
     if (k === 2){
       T(2, 60, "路邊停車費", "m1", "expense", "[notification] 示範信用卡(爸爸)", { source: "notification" });   // 超過 45 天沒對到帳單
     }

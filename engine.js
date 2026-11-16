@@ -126,9 +126,10 @@ function activeFilters(filters){
   filterCache = { src: filters, out };
   return out;
 }
-/** 特殊規則的種類：`use:<分類key|skip>`＝存款轉出的用途；`fix:fixed|free`＝這筆算固定支出或消費支出；其餘（cat:／exclude／include）回 null。
+/** 特殊規則的種類：`use:<分類key|skip>`＝存款轉出的用途；`fix:fixed|free`＝這筆算固定支出或消費支出；
+ *  `amort:n@off`＝攤提（見 amortInfo）；其餘（cat:／exclude／include）回 null。
  *  特殊規則各有各的判定函式，其餘比對（交易分類、排除）一律跳過它們，免得它遮蔽後面的 cat:／exclude／include。 */
-const ruleKind = r => { const a = s(r.action); return a.startsWith("use:") ? "use" : a.startsWith("fix:") ? "fix" : null; };
+const ruleKind = r => { const a = s(r.action); return a.startsWith("use:") ? "use" : a.startsWith("fix:") ? "fix" : a.startsWith("amort:") ? "amort" : null; };
 /** want：null＝只看一般規則（跳過 use:／fix:）、"use"／"fix"＝只看那一種特殊規則（舊呼叫的 true 等同 "use"）。
  *  date（ISO 日期，可帶時間）只給 fix: 規則用：date_from／date_to 含頭含尾、null 不限；沒給日期就不檢查區間。 */
 function matchFilterRule(merchant, note, source, amount, kind, filters, want = null, date = null){
@@ -309,11 +310,83 @@ const BUCKET_LABEL = { fixed: "固定支出", free: "消費支出", invest: "投
  *  ctx 只用到 catRules／filterRules／cats（分析頁、明細頁的 d 直接傳）。 */
 /** fix: 規則同優先序時「後設的」先比：醫師改主意再設一次（例：先設往後固定、之後又設往後消費），新的那條要贏。
  *  依原陣列快取（每筆支出都會判一次，不要每次重排） */
-const fixOrder = new WeakMap();
-function newestFixFirst(filters){
-  if (!fixOrder.has(filters))
-    fixOrder.set(filters, filters.filter(r => ruleKind(r) === "fix").sort((a, b) => s(b.created_at).localeCompare(s(a.created_at))));
-  return fixOrder.get(filters);
+const kindOrder = { fix: new WeakMap(), amort: new WeakMap() };
+function newestKindFirst(filters, kind){
+  const m = kindOrder[kind];
+  if (!m.has(filters))
+    m.set(filters, filters.filter(r => ruleKind(r) === kind).sort((a, b) => s(b.created_at).localeCompare(s(a.created_at))));
+  return m.get(filters);
+}
+const newestFixFirst = filters => newestKindFirst(filters, "fix");
+
+/* ── 攤提：一筆大額（例：年繳保費）在統計上平均分到一段期間的每個月，總額不變 ──
+ * 設定＝{ n（月數）, off（起始月相對付款月的位移）}：往後一年＝{12, 0}；往前一年（到付款月止）＝{12, −11}；
+ * 也可以是任意區間（例：下個月起 6 個月＝{6, 1}）。
+ * 紀錄：transactions.amortize＝n（null＝跟規則、1＝明確不攤）＋ amortize_offset＝off（null 當 0）。
+ * 規則：filter_rules.action＝「amort:n@off」（off 為 0 可省略成「amort:n」；amort:1＝不攤）。
+ * 只攤交易表「不重複」的支出（存款轉出算成的支出不攤）。除不盡的零頭算在付款月（不在區間內就算在第一個月）。 */
+const AMORT_MAX = 60;
+const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.trunc(Number(v) || 0)));
+/** 「amort:n@off」→ { n, off }；壞的回 n＝0 */
+function parseAmort(action){
+  const m = /^amort:(-?\d+)(?:@(-?\d+))?$/.exec(s(action).trim());
+  return m ? { n: +m[1], off: m[2] == null ? 0 : +m[2] } : { n: 0, off: 0 };
+}
+const amortAction = (n, off = 0) => (n < 2 ? "amort:1" : off ? `amort:${n}@${off}` : `amort:${n}`);
+function amortInfo(t, filters = []){
+  if (t.kind !== "expense") return { n: 0, off: 0, by: "none", rule: null };
+  let n, off, by = "record", rule = null;
+  if (t.amortize != null){ n = t.amortize; off = t.amortize_offset ?? 0; }
+  else {
+    rule = matchFilterRule(t.merchant, t.note, t.ruleSource ?? statSource(t), t.amount, "expense", newestKindFirst(filters, "amort"), "amort");
+    ({ n, off } = rule ? parseAmort(rule.action) : { n: 0, off: 0 });
+    by = rule ? "rule" : "none";
+  }
+  n = clampInt(n, 0, AMORT_MAX);
+  return n < 2 ? { n: 0, off: 0, by, rule } : { n, off: clampInt(off, -AMORT_MAX, AMORT_MAX), by, rule };
+}
+/** 這筆付款月加 k 個月的「年-月」 */
+const amortMonth = (t, k) => { const [y, m] = ymAdd(+s(t.occurred_at).slice(0, 4), +s(t.occurred_at).slice(5, 7), k); return `${y}-${pad(m)}`; };
+/** 一筆拆成 n 片（第 off ～ off+n−1 個月）：付款月那片沿用原 id（狀態、編輯都對得上），其他月 id＝「原id#a位移」。
+ *  日期＝同一天（夾到該月最後一天）。每片帶 amort：{ n, off, k（第幾片，1 起）, N, total, src（原紀錄） } */
+function amortSlices(t, n, off = 0){
+  const total = Number(t.amount) || 0, per = Math.floor(total / n), rest = total - per * (n - 1);
+  const day = +s(t.occurred_at).slice(8, 10) || 1, restAt = off <= 0 && off + n > 0 ? 0 : off, out = [];
+  for (let i = 0; i < n; i++){
+    const o = off + i, ym = amortMonth(t, o), [yy, mm] = ym.split("-").map(Number);
+    const dd = Math.min(day, new Date(Date.UTC(yy, mm, 0)).getUTCDate());
+    out.push({ ...t, id: o === 0 ? t.id : `${t.id}#a${o}`, occurred_at: `${ym}-${pad(dd)}`,
+               amount: o === restAt ? rest : per, amort: { n, off, k: i + 1, N: n, total, src: t } });
+  }
+  return out;
+}
+/** 把一段期間 [a, b) 的交易換成攤提後的樣子：有攤的原紀錄拿掉，改放落在這段期間的那幾片。
+ *  srcs＝期間外也要看的攤提來源（有 amortize 的、對得到 amort: 規則的；可含重複與非攤提的，這裡會篩）。 */
+function amortize(list, srcs, filters, a, b){
+  const act = new Map();
+  for (const t of list.concat(srcs || []))
+    if (t.dedup_status === "unique" && !t.amort && !act.has(t.id)){ const i = amortInfo(t, filters); if (i.n) act.set(t.id, [t, i]); }
+  if (!act.size) return list;
+  const out = list.filter(t => !act.has(t.id));
+  for (const [t, i] of act.values()) for (const x of amortSlices(t, i.n, i.off)) if (x.occurred_at >= a && x.occurred_at < b) out.push(x);
+  return out;
+}
+/** 期間資料（loadPeriod 的形狀）整份套用攤提：本期、前期、近 6 月各用自己的區間 */
+function amortizePeriod(d, period, srcs, filters){
+  if (!srcs.length && !newestKindFirst(filters, "amort").length && !d.txsAll.some(t => t.amortize != null)) return d;
+  const pv = Period.prev(period), an = Period.anchorMonth(period);
+  const [y5, m5] = ymAdd(an.y, an.m, -5), [y1, m1] = ymAdd(an.y, an.m, 1);
+  const txsAll = amortize(d.txsAll, srcs, filters, Period.startDate(period), Period.endExclusive(period));
+  return { ...d, txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"),
+           prevTxs: amortize(d.prevTxs, srcs, filters, Period.startDate(pv), Period.endExclusive(pv)),
+           range6: amortize(d.range6, srcs, filters, `${y5}-${pad(m5)}-01`, `${y1}-${pad(m1)}-01`) };
+}
+/** 白話：給了 t 就寫實際月份（2026-11 ～ 2027-10），沒給（規則）就寫相對付款月 */
+function amortLabel(n, off = 0, t = null){
+  if (n < 2) return "不攤提";
+  if (t) return `攤提 ${n} 個月（${amortMonth(t, off)} ～ ${amortMonth(t, off + n - 1)}）`;
+  const where = off === 0 ? "付款月起往後" : off === -(n - 1) ? "往前到付款月" : `付款月${off > 0 ? "後" : "前"} ${Math.abs(off)} 個月起`;
+  return `攤提 ${n} 個月（${where}）`;
 }
 function fixedInfo(t, ctx){
   const filters = ctx.filterRules || [];
@@ -455,7 +528,7 @@ const NON_SUB_KW = ["停車", "計時", "停車場", "路邊停", "嘟嘟房", "
 function detectSubscriptions(txs, ignores = new Set()){
   const byMerchant = new Map();
   for (const t of txs){
-    if (t.kind !== "expense" || !notMergedAux(t) || isBlank(t.merchant)) continue;
+    if (t.kind !== "expense" || t.amort || !notMergedAux(t) || isBlank(t.merchant)) continue;   // 攤提的分片每月同額同日，不是訂閱
     const k = s(t.merchant).trim();
     if (!byMerchant.has(k)) byMerchant.set(k, []);
     byMerchant.get(k).push(t);
@@ -936,6 +1009,7 @@ function filterRuleSummary(r, labels = []){
             : a.startsWith("use:") ? `→ 存款轉出算「${labelOf(a.slice(4), labels)}」`
             : a.startsWith("cat:") ? `→ 分類「${labelOf(a.slice(4), labels)}」`
             : a.startsWith("fix:") ? `→ 算${a === "fix:fixed" ? "固定" : "消費"}支出${fixRangeText(r)}`
+            : a.startsWith("amort:") ? `→ ${amortLabel(parseAmort(a).n, parseAmort(a).off)}`
             : a === "exclude" ? "→ 不納入收支" : a === "include" ? "→ 納入收支" : `→ ${a}`;
   return `${cond.join("、") || "所有交易"} ${act}`;
 }
@@ -1010,6 +1084,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
   normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
+  amortInfo, amortSlices, amortize, amortizePeriod, amortLabel, amortAction, amortMonth, parseAmort, AMORT_MAX,
   INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, acctSpends, acctUseOf, acctRuleKey, acctRuleSource, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;

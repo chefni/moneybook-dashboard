@@ -818,5 +818,51 @@ test("新內建分類：🏡 房貸信貸、🧓 孝親 能分類；已有 label
   eq(E.categoryOptions([]).length, E.AI_CATS.length); eq(E.missingBuiltins([]), []);
 });
 
+/* ═══ 攤提（v97） ═══ */
+test("amortSlices：往前一年＝{12,−11}、總額不變、零頭在付款月、月底日期夾到該月最後一天", () => {
+  const t = tx("y1", 60001, "2026-11-30", "expense", "某人壽");
+  const sl = E.amortSlices(t, 12, -11);
+  eq(sl.length, 12); eq(sl[0].occurred_at, "2025-12-30"); eq(sl[11].occurred_at, "2026-11-30");
+  eq(sl.find(x => x.occurred_at.startsWith("2026-02")).occurred_at, "2026-02-28");
+  eq(sl.reduce((a, x) => a + x.amount, 0), 60001);
+  eq([sl[11].id, sl[11].amount, sl[0].amount], ["y1", 5001, 5000], "付款月沿用原 id、帶零頭");
+  eq(sl[0].id, "y1#a-11"); eq(sl[5].amort.k, 6); ok(sl[5].amort.src === t);
+  eq(E.amortSlices(t, 3).map(x => x.occurred_at), ["2026-11-30", "2026-12-30", "2027-01-30"], "往後（off 0）含付款月");
+  eq(E.amortSlices(t, 3, 2).map(x => [x.id, x.amount]), [["y1#a2", 20001], ["y1#a3", 20000], ["y1#a4", 20000]],
+    "區間不含付款月：零頭放第一個月");
+});
+test("amortInfo／amortize：紀錄值（月數＋位移）優先於規則；區間外的來源也分得進來", () => {
+  const t = tx("y1", 36000, "2026-11-05", "expense", "某人壽", "email", { amortize: 12, amortize_offset: -11 });
+  const other = tx("o1", 500, "2026-11-06", "expense", "全聯");
+  eq(E.amortize([t, other], [], [], "2026-11-01", "2026-12-01").map(x => [x.id, x.amount]), [["o1", 500], ["y1", 3000]]);
+  eq(E.amortize([], [t], [], "2026-03-01", "2026-04-01").map(x => [x.id, x.amount, x.occurred_at]), [["y1#a-8", 3000, "2026-03-05"]]);
+  eq(E.amortize([], [t], [], "2027-01-01", "2027-02-01"), [], "往前攤：付款月之後沒有");
+  const rules = [filter("amort:12", { kw: "人壽", direction: "expense" }), filter("amort:6@1", { kw: "學費", direction: "expense" })];
+  const r = tx("y2", 12000, "2026-01-10", "expense", "某人壽");
+  eq(E.amortInfo(r, rules), { n: 12, off: 0, by: "rule", rule: rules[0] });
+  eq(E.amortInfo(tx("y3", 6000, "2026-08-01", "expense", "學費"), rules).off, 1);
+  eq(E.amortInfo({ ...r, amortize: 1 }, rules).n, 0, "這筆明寫 1＝不攤，擋住規則");
+  eq(E.amortInfo(tx("i", 9, "2026-01-01", "income", "某人壽"), rules).n, 0, "收入不攤");
+  eq(E.amortize([], [{ ...t, dedup_status: "suspect" }], [], "2026-03-01", "2026-04-01"), [], "疑似重複的不攤");
+  eq([E.amortAction(12, 0), E.amortAction(12, -11), E.amortAction(0)], ["amort:12", "amort:12@-11", "amort:1"]);
+  eq(E.parseAmort("amort:12@-11"), { n: 12, off: -11 }); eq(E.parseAmort("amort:x").n, 0);
+  eq(E.filterRuleSummary(rules[0]), "含「人壽」、支出 → 攤提 12 個月（付款月起往後）");
+  eq(E.amortLabel(12, -11), "攤提 12 個月（往前到付款月）");
+  eq(E.amortLabel(12, 0, t), "攤提 12 個月（2026-11 ～ 2027-10）");
+});
+test("amortizePeriod＋analyze：本期支出、前期、近 6 月趨勢都用分片；分片不被當成訂閱", () => {
+  const big = tx("y1", 12000, "2026-02-10", "expense", "某人壽", "email", { amortize: 12, amortize_offset: -11 });
+  const p = E.Period.month(2026, 2);
+  const base = { members: [me], accounts: [], catRules: [], labels: [], excludeRules: [], filterRules: [], cats: [], subIgnores: new Set() };
+  const raw = { txsAll: [big], txs: [big], prevTxs: [], range6: [big], acctTxnsWide: [] };
+  const d = E.amortizePeriod(raw, p, [big], []);
+  const r = E.analyze({ ...base, ...d }, p, null, "2026-02-20");
+  eq(r.te, 1000); eq(r.prevTe, 1000, "前期（1 月）也分到一片");
+  eq(r.trend6.map(x => x[1]), [1000, 1000, 1000, 1000, 1000, 1000]);
+  eq(r.subs, [], "每月同額同日的分片不是訂閱");
+  const plain = { ...raw, txsAll: [tx("o1", 500, "2026-02-03", "expense", "全聯")] };
+  ok(E.amortizePeriod(plain, p, [], []) === plain, "沒有任何攤提就原樣回傳");
+});
+
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);

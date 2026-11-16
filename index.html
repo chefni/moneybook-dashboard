@@ -43,8 +43,8 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=21c25c8bf7"></script>
-<script defer src="detail.js?v=f5bd6290a1"></script>
+<script defer src="engine.js?v=aa5e70b1cb"></script>
+<script defer src="detail.js?v=49b82c467d"></script>
 <script defer src="accounts.js?v=acd02d3ee1"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
@@ -471,7 +471,27 @@ async function fetchPeriod(p){
     ids.length ? pagedFetch(() => sb.from("account_transactions").select("*").in("account_id", ids)
       .gte("occurred_at", ws).lt("occurred_at", we).order("occurred_at", { ascending: false })) : []
   ]);
-  return { txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"), prevTxs, range6, acctTxnsWide };
+  const d = { txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"), prevTxs, range6, acctTxnsWide };
+  return E.amortizePeriod(d, p, await amortSources(), S.filterRules);
+}
+/** 攤提的來源（跨期間共用一份；refreshData 時跟期間快取一起清）：
+ *  自己設了 amortize 的支出＋對得到 amort: 規則的支出（各規則用關鍵字／金額撈全部月份）。
+ *  付款月在本期之外的分片，要靠這份才畫得出來。資料庫還沒有 amortize 欄位（v97 前）就當沒有。 */
+let amortJob = null;
+function amortSources(){
+  if (!amortJob){
+    amortJob = (async () => {
+      const direct = await pagedFetch(() => sb.from("transactions").select("*").eq("household_id", hid)
+        .eq("dedup_status", "unique").not("amortize", "is", null))
+        .catch(e => { if (e && e.code === "42703") return []; throw e; });
+      const rules = S.filterRules.filter(r => r.active !== false && String(r.action || "").startsWith("amort:"));
+      const viaRule = await Promise.all(rules.map(r => LiveStore.sameExpenses(r.kw || "", r.amount_min, r.amount_max)));
+      return direct.concat(...viaRule);
+    })();
+    const job = amortJob;
+    job.catch(() => { if (amortJob === job) amortJob = null; });
+  }
+  return amortJob;
 }
 /** 一個期間的交易資料：示範模式用 demo.js 的合成資料 */
 const periodData = async p => (DEMO ? demoPeriod(p) : loadPeriod(p));
@@ -1378,7 +1398,7 @@ async function doRefresh(){
       const mark = DEMO ? null : await dataMark();
       tripDirty = true;                 // 行程跟著重抓（開著才會真的載入；重抓中保留舊畫面）
       detailStale(); accountsStale(); meStale();   // 明細的逾期通知、帳戶頁的快照、我的頁的設定同理：開著那頁才重抓
-      if (!DEMO){ await loadStatic(); periodCache.clear(); }
+      if (!DEMO){ await loadStatic(); periodCache.clear(); amortJob = null; }
       buildChips();
       await render(true);
       liveMark = mark; lastFull = Date.now();
@@ -1557,7 +1577,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=cc8534496b";
+    d.src = "demo.js?v=9faa3d1c76";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);
