@@ -234,7 +234,7 @@ function accountTxns(root, acc){
 function useTag(a, acc, auto = new Map()){
   if (a.exclude_state === "exclude") return null;
   const use = E.acctUseOf(a, acc, S.members, S.filterRules);
-  if (use != null) return { text: E.useLabel(use, S.labels), pending: false };
+  if (use != null) return { text: E.useLabel(use, S.labels, E.acctFixedInfo(a, acc, S.members, use, S).bucket), pending: false };
   return acc.spend_account && !E.isCardFeeText(a) && !auto.has(a.id) ? { text: "待分用途", pending: true } : null;
 }
 /** 家用帳戶才需要：抓同期間「全部帳戶」的流水，找出哪些轉出其實是轉到自家另一個帳戶（頭尾各多抓 3 天，互轉最多差 2 天） */
@@ -252,32 +252,66 @@ function spendToggle(root, acc){
     if (await guarded(() => Store.setSpendAccount(acc.id, chk.checked))) refreshData();
     else { chk.checked = !chk.checked; chk.disabled = false; }
   });
-  add(root, box, el("p", "note", "例：配偶轉來的家用錢，之後再轉出去繳學費、孝親、日常花費，要一筆一筆分成固定或自由開支。"));
+  add(root, box, el("p", "note", "例：配偶轉來的家用錢，之後再轉出去繳學費、孝親、日常花費，要一筆一筆分成固定支出或消費支出。"));
 }
-/** 這筆轉出的用途：選分類／不計／跟隨規則；可順手記成規則（同帳戶、同摘要、同金額以後都這樣算） */
+/** 這筆轉出的用途：選分類／不計／跟隨規則；可順手記成規則（同帳戶、同摘要、同金額以後都這樣算）。
+ *  也可勾這筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費算固定），
+ *  並選擇讓「之前」「往後」相同（同帳戶＋同摘要＋同金額）的轉出也比照，存成帶日期區間的 fix: 規則。 */
 function purposeDialog(a, acc){
   const f = formDialog("這筆轉出的用途");
   const followed = E.acctUseOf({ ...a, purpose: null }, acc, S.members, S.filterRules);
   const opts = [[`跟隨規則（目前：${followed == null ? "不計" : E.useLabel(followed, S.labels)}）`, ""], ["不計（轉帳）", "skip"],
     // 不給選 📈 投資：買股票由證券對帳單記成投資，存款轉去證券戶再算一次會重複（請選「不計」）
-    ...E.categoryOptions(S.labels).filter(([k]) => k !== E.INVEST_CAT).map(([k, label]) => [`${label}·${E.catBucketLabel(k, S.labels)}`, k])];
+    ...E.categoryOptions(S.labels).filter(([k]) => k !== E.INVEST_CAT).map(([k, label]) => [label, k])];
   if (a.purpose && !opts.some(o => o[1] === a.purpose)) opts.push([E.labelOf(a.purpose, S.labels), a.purpose]);   // 分類已被刪掉也別悄悄改掉
   const pick = select(opts, a.purpose || "");
   const [remember, rememberChk] = checkbox("以後這個帳戶、同摘要、同金額的轉出都這樣算", false);
   // 沒摘要時規則只剩「帳戶＋金額」，會誤抓同額的其他轉出 → 不給記成規則
   const canRemember = E.normalizeMerchant(a.description) !== "";
-  const check = f.check = () => { rememberChk.disabled = !pick.value || !canRemember; if (rememberChk.disabled) rememberChk.checked = false; };
+
+  // ── 支出性質（固定支出／消費支出）：選「不計」時整區隱藏 ──
+  const useNow = () => (pick.value === "skip" ? null : pick.value || followed);   // 算成哪一類；null＝不計
+  const natOf = () => E.acctFixedInfo(a, acc, S.members, useNow(), S);
+  const [fixedBox, fixedChk] = checkbox("固定支出（沒勾＝消費支出）", false);
+  const [beforeBox, beforeChk] = checkbox("之前相同的紀錄也比照", false), [afterBox, afterChk] = checkbox("往後相同的紀錄也比照", false);
+  const basis = el("p", "note"), scope = el("div"), natSec = el("div");
+  add(scope, beforeBox, afterBox,
+    el("p", "note", "「相同」＝同帳戶、同摘要、同金額的轉出。若其他筆各自手動勾過，仍以它們自己的為準。"));
+  add(natSec, el("b", null, "支出性質"), fixedBox, basis, scope);
+  let baseline = false, touched = false;
+  const BASIS = { record: "目前依據：這筆手動設定", rule: "目前依據：規則", default: "目前依據：預設（只有貸款、保險、學費算固定）" };
+  const refresh = () => {
+    const use = useNow();
+    natSec.hidden = use == null;
+    if (use == null) return;
+    const info = natOf();
+    baseline = info.fixed;
+    if (!touched) fixedChk.checked = baseline;
+    basis.textContent = BASIS[info.by] + (info.by === "rule" && info.rule ? `（${E.filterRuleSummary(info.rule, S.labels)}）` : "");
+    // 之前／往後一直看得到（這筆本來就對、只想讓其他相同的比照，不必先改再改回來）；沒摘要不能記規則
+    scope.hidden = !canRemember;
+    if (scope.hidden){ beforeChk.checked = false; afterChk.checked = false; }
+  };
+  const check = f.check = () => { rememberChk.disabled = !pick.value || !canRemember; if (rememberChk.disabled) rememberChk.checked = false; refresh(); };
   pick.addEventListener("change", check);
+  fixedChk.addEventListener("change", () => { touched = true; refresh(); });
   add(f.body, el("b", null, a.description || "（無摘要）"), el("p", "muted", `${a.occurred_at} · ${E.ntD(Math.abs(a.amount))} · ${E.accountDisplay(acc, S.members)}`),
-    field("這筆算成", pick), remember,
+    field("這筆算成", pick), remember, natSec,
     el("p", "note", "「不計」＝不算消費（例如繳卡費、自己帳戶間搬錢、轉去證券戶買股——股票由證券對帳單記成投資）；" +
-      "選分類＝算成那一類的支出，固定或自由看該分類的設定。"));
+      "選分類＝算成那一類的支出。"));
   check();
   f.save.addEventListener("click", async () => {
     const v = pick.value || null;
+    // 只有「有算成支出」且勾的和目前判定不同才寫 fixed（不傳＝不動，沒跑 v96 也存得了用途）
+    const counted = v !== "skip" && useNow() != null;
+    const fixedChanged = counted && fixedChk.checked !== baseline;
+    const before = counted && canRemember && beforeChk.checked, after = counted && canRemember && afterChk.checked;
     const ok = await f.submit(async () => {
-      await Store.setPurpose(a.id, v);
-      if (v && rememberChk.checked) await Store.addFilterRule(E.useRuleRow(a, acc, v)).catch(e => {
+      await Store.setPurpose(a.id, v, fixedChanged ? fixedChk.checked : undefined);
+      const rules = [];
+      if (v && rememberChk.checked) rules.push(E.useRuleRow(a, acc, v));
+      if (before || after) rules.push(E.acctFixRuleRow(a, acc, fixedChk.checked, before, after));
+      for (const row of rules) await Store.addFilterRule(row).catch(e => {
         refreshData();   // 用途已存：畫面先跟上，再報規則失敗
         throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);
       });

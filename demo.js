@@ -55,7 +55,7 @@ const DemoStore = {
     DEMO_DATA.snaps = DEMO_DATA.snaps.filter(x => !(x.account_id === account_id && x.snapshot_date === snapshot_date));
     DEMO_DATA.snaps.push({ id: "n" + Date.now(), account_id, balance, cost, snapshot_date, source: "manual" });
   },
-  setPurpose: async (id, purpose) => { demoRow(DEMO_DATA.acct, id).purpose = purpose; },
+  setPurpose: async (id, purpose, fixed) => { Object.assign(demoRow(DEMO_DATA.acct, id), { purpose }, fixed === undefined ? {} : { fixed }); },
   setSpendAccount: async (id, on) => { demoRow(S.accounts, id).spend_account = on; },
   renameAccount: async (id, displayName) => { demoRow(S.accounts, id).display_name = displayName; },
   addAccount: async (name, type, member_id) => {
@@ -94,8 +94,8 @@ const DemoStore = {
   seedLabels: async (keys, from = 0) => {
     S.labels = [...S.labels, ...keys.map((k, i) => ({ id: "l" + from + "_" + i, key: k, label: k, sort_order: from + i, builtin: true, active: true }))];
   },
-  addLabel: async (key, label, sort_order, budget, fixed = null) => {
-    S.labels = [...S.labels, { id: "l" + Date.now(), key, label, sort_order, budget, fixed, builtin: false, active: true }];
+  addLabel: async (key, label, sort_order, budget) => {
+    S.labels = [...S.labels, { id: "l" + Date.now(), key, label, sort_order, budget, builtin: false, active: true }];
   },
   updateLabel: async (id, fields) => { demoRow(S.labels, id); S.labels = S.labels.map(l => (l.id === id ? { ...l, ...fields } : l)); },
   deleteLabel: async id => { demoRow(S.labels, id); S.labels = S.labels.filter(l => l.id !== id); },
@@ -105,7 +105,7 @@ const DemoStore = {
     if (!S.subIgnores.has(p)) throw new Error("沒有成功寫進去（這筆可能已被刪除，或沒有權限）");
     S.subIgnores = new Set([...S.subIgnores].filter(x => x !== p));
   },
-  addFilterRule: async row => { S.filterRules = [...S.filterRules, { id: "f" + Date.now(), active: true, ...row }]; },
+  addFilterRule: async row => { S.filterRules = [...S.filterRules, { id: "f" + Date.now(), active: true, created_at: new Date().toISOString(), ...row }]; },
   setFilterActive: async (id, active) => { demoRow(S.filterRules, id); S.filterRules = S.filterRules.map(r => (r.id === id ? { ...r, active } : r)); },
   deleteFilterRule: async id => { demoRow(S.filterRules, id); S.filterRules = S.filterRules.filter(r => r.id !== id); },
   addReminder: async (name, due_day) => { S.reminders = [...S.reminders, { id: "r" + Date.now(), name, due_day, active: true }]; },
@@ -179,6 +179,10 @@ function buildDemo(){
     { id: "fr3", name: "轉出用途：房貸", priority: 100, kw: "房貸", account: "活存", amount_min: 18000, amount_max: 18000, direction: "expense", action: "use:🏡 房貸信貸", active: true },
     { id: "fr4", name: "轉出用途：孝親", priority: 100, kw: "孝親", account: "", amount_min: null, amount_max: null, direction: "expense", action: "use:🧓 孝親", active: true },
     { id: "fr2", name: "", priority: 50, kw: "示範測試", account: "", amount_min: null, amount_max: null, direction: "any", action: "cat:" + cat("娛樂"), active: true }];
+  // 支出性質規則（含日期區間）：訂閱串流從兩個月前起算固定支出（更早的仍是預設的消費支出）
+  const [fy, fm] = E.ymAdd(now.getFullYear(), now.getMonth() + 1, -2);
+  filterRules.push({ id: "fr5", name: "支出性質：NETFLIX", priority: 100, kw: "NETFLIX", account: "", amount_min: null, amount_max: null,
+                     direction: "expense", action: "fix:fixed", date_from: `${fy}-${pad(fm)}-01`, date_to: null, active: true });
   Object.assign(S, { members, accounts, labels, cats, reminders, catRules, excludeRules, filterRules, subIgnores: new Set(["示範停車場"]) });
   const txs = [], acct = [], snaps = [];
   let n = 0;
@@ -205,6 +209,9 @@ function buildDemo(){
       T(1, 85, "全家便利商店", "m1", "expense", "[notification] 示範信用卡(爸爸)", { source: "notification" });
       T(2, 3600, "公司聚餐代墊", "m1", "expense", "[email] 示範信用卡(爸爸)", { exclude_state: "exclude" });
       T(25, 15000, "繳信用卡費", "m1", "transfer", "[email] 示範銀行(爸爸)");
+      // 手動勾選支出性質：保險改成消費支出、網路費改成固定支出（點進去看得到「這筆手動設定」）
+      T(4, 2300, "示範保險費", "m1", "expense", "[email] 示範信用卡(爸爸)", { fixed: false });
+      T(5, 1099, "示範網路費", "m2", "expense", "[email] 示範銀行卡(媽媽)", { fixed: true });
     }
     if (k === 2){
       T(2, 60, "路邊停車費", "m1", "expense", "[notification] 示範信用卡(爸爸)", { source: "notification" });   // 超過 45 天沒對到帳單
@@ -218,7 +225,7 @@ function buildDemo(){
     acct.push({ id: "i" + (++n), account_id: "a2", occurred_at: day(21), amount: 37, description: "活儲利息", note: "" });
     // 存款轉出的用途：預約轉帳（規則認得）、手動指定、繳卡費（自動不算）、家用帳戶的待分類
     acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(8), amount: -18000, description: "預約轉帳 房貸", note: "" });
-    acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(10), amount: -5000, description: "孝親費", note: "" });
+    acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(10), amount: -5000, description: "孝親費", note: "", ...(k === 0 ? { fixed: true } : {}) });   // 本月這筆手動勾成固定支出
     acct.push({ id: "o" + (++n), account_id: "a1", occurred_at: day(15), amount: -15000, description: "信用卡費", note: "" });
     acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(11), amount: -6000, description: "手機轉帳 補習班", note: "", purpose: "📚 教育" });
     acct.push({ id: "o" + (++n), account_id: "a2", occurred_at: day(18), amount: -2500, description: "手機轉帳", note: "" });

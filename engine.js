@@ -126,18 +126,25 @@ function activeFilters(filters){
   filterCache = { src: filters, out };
   return out;
 }
-/** `use:<分類key|skip>`＝存款轉出的用途規則，只給 acctUseOf 用；其餘（交易表、收入）一律跳過它，免得它遮蔽後面的 cat:／exclude／include */
-const isUseRule = r => s(r.action).startsWith("use:");
-function matchFilterRule(merchant, note, source, amount, kind, filters, wantUse = false){
+/** 特殊規則的種類：`use:<分類key|skip>`＝存款轉出的用途；`fix:fixed|free`＝這筆算固定支出或消費支出；其餘（cat:／exclude／include）回 null。
+ *  特殊規則各有各的判定函式，其餘比對（交易分類、排除）一律跳過它們，免得它遮蔽後面的 cat:／exclude／include。 */
+const ruleKind = r => { const a = s(r.action); return a.startsWith("use:") ? "use" : a.startsWith("fix:") ? "fix" : null; };
+/** want：null＝只看一般規則（跳過 use:／fix:）、"use"／"fix"＝只看那一種特殊規則（舊呼叫的 true 等同 "use"）。
+ *  date（ISO 日期，可帶時間）只給 fix: 規則用：date_from／date_to 含頭含尾、null 不限；沒給日期就不檢查區間。 */
+function matchFilterRule(merchant, note, source, amount, kind, filters, want = null, date = null){
   if (!filters.length) return null;
+  const w = want === true ? "use" : want || null;
   const text = normalizeMerchant(merchant) + " " + normalizeMerchant(note);
   const dir = kind === "income" ? "income" : "expense";
+  const day = date == null ? null : s(date).slice(0, 10);
   return activeFilters(filters).find(r =>
     (isBlank(r.kw) || text.includes(normalizeMerchant(r.kw))) &&
     (isBlank(r.account) || lc(source).includes(s(r.account).trim().toLowerCase())) &&
     (r.amount_min == null || amount >= r.amount_min) &&
     (r.amount_max == null || amount <= r.amount_max) &&
-    ((r.direction || "any") === "any" || r.direction === dir) && isUseRule(r) === wantUse) || null;
+    ((r.direction || "any") === "any" || r.direction === dir) && ruleKind(r) === w &&
+    (w !== "fix" || day == null || ((r.date_from == null || day >= s(r.date_from).slice(0, 10)) &&
+                                    (r.date_to == null || day <= s(r.date_to).slice(0, 10))))) || null;
 }
 
 /** Rules.kt statSource：帳單來源名（各卡/來源帳單分組用）。 */
@@ -292,22 +299,57 @@ function autoExclusions(txs, acctTxns, accounts = [], members = [], today = toda
 /* ── 存款轉出的「用途」：預約轉帳（房貸、保險、孝親）與家用帳戶的花費，依用途算成消費 ──
  *  優先序：① exclude_state 排除 ② purpose（手動）③ use: 規則 ④ 摘要像繳卡費 ⑤ 其餘不算（家用帳戶則列待分用途）。 */
 const INVEST_CAT = "📈 投資";
-// 固定類預設（labels 的 fixed 為 null 時用）；其餘＝自由；📈 投資另歸投資
-const FIXED_DEFAULT = new Set(["🧾 稅務", "🛡️ 保險", "💊 醫療", "🚗 交通", "💻 數位訂閱", "📱 電信", "🏠 水電燃氣",
-  "🧺 食品雜貨", "💳 手續費", "📚 教育", "🏡 房貸信貸", "🧓 孝親"]);
-function isFixedCat(key, labels = []){
-  const l = labels.find(l => l.key === key);
-  return l && l.fixed != null ? !!l.fixed : FIXED_DEFAULT.has(key);
+// 預設算「固定支出」的分類（貸款、保險、學費）；其餘預設＝消費支出。分類不再綁定固定與否：每筆可自己勾（見 fixedInfo）
+const FIXED_CATS = new Set(["🏡 房貸信貸", "🛡️ 保險", "📚 教育"]);
+const BUCKET_LABEL = { fixed: "固定支出", free: "消費支出", invest: "投資" };
+
+/** 一筆支出的支出性質。優先序：① 這筆自己的 fixed（非 null）② 第一條命中的 fix: 規則（含日期區間）③ 預設（分類屬 FIXED_CATS 才固定）。
+ *  回 { fixed: 勾選框的值, by: "record"|"rule"|"default", rule, bucket: "fixed"|"free"|"invest" }；
+ *  分類是 📈 投資 的支出歸 invest（不算固定也不算消費），但 fixed／by 仍照實回，畫面要用。
+ *  ctx 只用到 catRules／filterRules／cats（分析頁、明細頁的 d 直接傳）。 */
+/** fix: 規則同優先序時「後設的」先比：醫師改主意再設一次（例：先設往後固定、之後又設往後消費），新的那條要贏。
+ *  依原陣列快取（每筆支出都會判一次，不要每次重排） */
+const fixOrder = new WeakMap();
+function newestFixFirst(filters){
+  if (!fixOrder.has(filters))
+    fixOrder.set(filters, filters.filter(r => ruleKind(r) === "fix").sort((a, b) => s(b.created_at).localeCompare(s(a.created_at))));
+  return fixOrder.get(filters);
 }
-/** 這一類算哪一桶：fixed／free／invest */
-const catBucket = (key, labels) => (key === INVEST_CAT ? "invest" : isFixedCat(key, labels) ? "fixed" : "free");
-const BUCKET_LABEL = { fixed: "固定", free: "自由", invest: "投資" };
-const catBucketLabel = (key, labels) => BUCKET_LABEL[catBucket(key, labels)];
+function fixedInfo(t, ctx){
+  const filters = ctx.filterRules || [];
+  const cat = classifyF(t, ctx.catRules || [], filters, ctx.cats || []);
+  let fixed, by = "default", rule = null;
+  if (t.fixed != null){ fixed = !!t.fixed; by = "record"; }
+  else if ((rule = matchFilterRule(t.merchant, t.note, t.ruleSource ?? statSource(t), t.amount, "expense", newestFixFirst(filters), "fix", t.occurred_at))){
+    fixed = s(rule.action) === "fix:fixed"; by = "rule";   // 「fix:」後面不是 fixed 的壞規則當消費
+  } else fixed = FIXED_CATS.has(cat);
+  return { fixed, by, rule, bucket: cat === INVEST_CAT ? "invest" : fixed ? "fixed" : "free" };
+}
+const isFixedTx = (t, ctx) => fixedInfo(t, ctx).bucket === "fixed";
+const bucketLabel = (t, ctx) => BUCKET_LABEL[fixedInfo(t, ctx).bucket];
+const dayOf = v => s(v).slice(0, 10);
+const FIX_ACTION = fixed => (fixed ? "fix:fixed" : "fix:free");
+/** 「之前／往後相同的紀錄也比照」要存的 fix: 規則的日期區間：只勾往後＝date_from＝這筆日期；只勾之前＝date_to；兩個都勾＝不限 */
+const fixRange = (date, before, after) => ({ date_from: after && !before ? dayOf(date) : null, date_to: before && !after ? dayOf(date) : null });
+/** 交易表支出：商家相同（kw＝商家原文 trim；商家空白不能記成規則，呼叫端要先擋） */
+function fixRuleRow(t, fixed, before, after){
+  const kw = s(t.merchant).trim();
+  return { name: `支出性質：${kw}`, priority: 100, kw, account: "", amount_min: null, amount_max: null, direction: "expense",
+           action: FIX_ACTION(fixed), ...fixRange(t.occurred_at, before, after) };
+}
+/** 存款轉出：同帳戶＋同摘要＋同金額（寫法同 useRuleRow） */
+function acctFixRuleRow(a, acc, fixed, before, after){
+  const amt = Math.abs(a.amount);
+  return { name: `支出性質：${s(a.description) || "（無摘要）"}`, priority: 100, kw: s(a.description).trim(), account: acctRuleKey(acc),
+           amount_min: Math.floor(amt), amount_max: Math.ceil(amt), direction: "expense", action: FIX_ACTION(fixed),
+           ...fixRange(a.occurred_at, before, after) };
+}
 
 const CARD_FEE_KW = ["卡費", "信用卡", "繳卡"];
 const isCardFeeText = a => CARD_FEE_KW.some(k => (s(a.description) + s(a.note)).includes(k));
-/** 用途的白話標籤：「🏡 房貸信貸·固定」或「不計（轉帳）」 */
-const useLabel = (use, labels) => (use === "skip" ? "不計（轉帳）" : `${labelOf(use, labels)}·${catBucketLabel(use, labels)}`);
+/** 用途的白話標籤：「🏡 房貸信貸·固定」或「不計（轉帳）」。bucket＝那一筆的判定（fixedInfo().bucket），不給就不加尾巴 */
+const useLabel = (use, labels, bucket = null) => (use === "skip" ? "不計（轉帳）"
+  : `${labelOf(use, labels)}${bucket ? "·" + { fixed: "固定", free: "消費", invest: "投資" }[bucket] : ""}`);
 /** 規則用的帳戶字串：顯示名＋原名，讓規則的「帳戶」欄可用帳號尾碼或顯示名比對 */
 const acctRuleSource = (acc, members) => (acc ? `${accountDisplay(acc, members)} ${acc.name}` : "");
 /** 寫規則時「帳戶」欄要填什麼：原名裡最後一段 4 碼以上數字的末 4 碼，沒有就用原名 */
@@ -324,7 +366,7 @@ function useRuleRow(a, acc, use){
 /** ②③：手動用途優先，其次第一條命中的 use: 規則。回 null＝沒決定、"skip"＝明確不計、其餘＝分類 key */
 function acctUseOf(a, acc, members, filters){
   if (!isBlank(a.purpose)) return a.purpose;
-  const f = matchFilterRule(a.description, a.note, acctRuleSource(acc, members), Math.abs(a.amount), "expense", filters, true);
+  const f = matchFilterRule(a.description, a.note, acctRuleSource(acc, members), Math.abs(a.amount), "expense", filters, "use");
   return (f && s(f.action).slice(4)) || null;   // 「use:」後面空白＝壞規則，當沒決定
 }
 /** 存款轉出 → 偽支出物件（可直接混進 exp；來源帳戶放 source，原始流水放 raw 讓畫面能開用途對話框） */
@@ -332,7 +374,11 @@ const acctOutRow = (a, acc, members) => ({
   id: "a:" + a.id, acctId: a.id, raw: a, kind: "expense", amount: Math.abs(a.amount),
   merchant: isBlank(a.description) ? "存款轉出" : a.description, note: s(a.note), occurred_at: a.occurred_at,
   source: accountDisplay(acc, members), family_member_id: assetOwnerId(acc, members),
-  fromAcct: true, exclude_state: null, dedup_status: "unique" });
+  fromAcct: true, exclude_state: null, dedup_status: "unique",
+  fixed: a.fixed ?? null,                            // v96 的欄位；還沒跑 v96 時讀不到＝null
+  ruleSource: acctRuleSource(acc, members) });       // fix: 規則的「帳戶」欄要比對顯示名＋原名（同 use: 規則）
+/** 存款流水（轉出）依用途 use 算成支出時的支出性質；use＝acctUseOf 的結果（分類 key） */
+const acctFixedInfo = (a, acc, members, use, ctx) => fixedInfo({ ...acctOutRow(a, acc, members), forcedCat: use }, ctx);
 /** 跨表重複：同一筆錢若銀行（非信用卡）帳單也記成支出，算成消費的存款轉出就不再算一次。
  *  只比銀行來源——交易表大多是信用卡帳單，同額相近日期多半是另一筆真的消費，拿來去重會誤刪。 */
 const isBankExpense = t => t.kind === "expense" && !t.fromAcct && notMergedAux(t) && t.id != null &&
@@ -531,7 +577,7 @@ function analyze(d, period, sel, today = todayIso()){
   const realInc = Math.max(0, ti - catAmt(incByCat, "📊 賣出"));
   const passive = catAmt(incByCat, "🏦 利息") + catAmt(incByCat, "💹 配息");
   const kdiv = (a, b) => Math.trunc(a / b);   // Kotlin Int 除法（向零取整）
-  const ratios = financeRatios(byCat, d.labels || [], realInc, te, investIn, spendIn(spends.pending, mStart, mNext));
+  const ratios = financeRatios(exp, d, realInc, te, investIn, spendIn(spends.pending, mStart, mNext));
   const fin = { realInc, consumption: te, investIn, investOut, passive,
     savingRate: realInc > 0 ? kdiv((realInc - te) * 100, realInc) : null,
     investRate: realInc > 0 ? kdiv(investIn * 100, realInc) : null };
@@ -548,11 +594,12 @@ function analyze(d, period, sel, today = todayIso()){
            trend6, fin, ratios, movers: prevByCat.size ? movers : [], subs };
 }
 
-/** 📐 四個比例：固定開銷／自由花費／投資／儲蓄各占真實收入幾 %。
- *  投資＝買入投資＋分類為 📈 投資的支出（後者已在 te 裡，所以儲蓄＝收入−te−買入投資 不會重複扣）。收入≤0 時百分比為 null。 */
-function financeRatios(byCat, labels, base, te, investIn, pendingRows){
+/** 📐 四個比例：固定支出／消費支出／投資／儲蓄各占真實收入幾 %。逐筆判桶（fixedInfo），同分類的兩筆可以一固定一消費。
+ *  投資＝買入投資＋分類為 📈 投資的支出（後者已在 te 裡，所以儲蓄＝收入−te−買入投資 不會重複扣）。收入≤0 時百分比為 null。
+ *  exp＝本期算進來的支出列（含存款轉出的偽支出）；ctx＝{ catRules, filterRules, cats }。 */
+function financeRatios(exp, ctx, base, te, investIn, pendingRows){
   const bucket = Object.fromEntries(Object.keys(BUCKET_LABEL).map(k => [k, 0]));
-  for (const [c, amt] of byCat) bucket[catBucket(c, labels)] += amt;
+  for (const t of exp) bucket[fixedInfo(t, ctx).bucket] += t.amount;
   const invest = investIn + bucket.invest, saving = base - te - investIn;
   const pct = v => (base > 0 ? Math.round(v * 100 / base) : null);
   return { base, fixed: bucket.fixed, free: bucket.free, invest, saving,
@@ -722,7 +769,7 @@ function detailView(d, period, sel, today = todayIso()){
   const expRows = txs.filter(t => t.kind === "expense").map(t => {
     const [ex, why] = txExc(t);
     return { t, date: t.occurred_at, ex, why, suspect: t.dedup_status === "suspect", rule: txExclusionFilter(t, filterRules) };
-  }).concat(spendRows).sort(newest);
+  }).concat(spendRows).map(r => ({ ...r, nat: fixedInfo(r.t, d) })).sort(newest);   // nat＝支出性質（固定／消費／投資、依據）
   const counts = r => !r.ex && !r.suspect;
   const exp = expRows.filter(counts).map(r => r.t);
   const te = sum(exp);
@@ -762,7 +809,7 @@ function detailView(d, period, sel, today = todayIso()){
     const dupe = dupIds.has(a.id);
     return { a, date: a.occurred_at, ex: dupe || (ex0 && !spend), why: dupe ? "與對帳單重複" : spend ? "" : why0,
              account: acc ? accountDisplay(acc, members) : "存款帳戶",
-             spend, use, pending: pendingIds.has(a.id),
+             spend, use, pending: pendingIds.has(a.id), nat: spend ? fixedInfo(spend, d) : null,
              rule: dep ? incomeExclusionFilter(dep, filterRules) : null };   // 轉出列不經篩選器（同 App）
   }).sort(newest);
 
@@ -795,11 +842,12 @@ function monthCsv(txs, d, exclusionOf = () => ""){
   const esc = v => `"${s(v).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
   const status = t => (t.fromAcct ? "存款轉出（依用途）" : { suspect: "疑似重複", merged: "已合併" }[t.dedup_status] || "");
   const owner = t => { const m = d.members.find(m => m.id === txOwnerId(t, d.members)); return m ? m.name : ""; };
+  const nature = t => (t.kind === "expense" ? BUCKET_LABEL[fixedInfo(t, d).bucket] : "");
   const rows = txs.slice().sort(newestFirst())
     .map(t => [t.occurred_at, kindLabel(t.kind), t.amount].join(",") + "," +
       [isBlank(t.merchant) ? t.note : t.merchant, labelOf(classifyF(t, d.catRules, d.filterRules, d.cats), d.labels),
-       statSource(t), owner(t), status(t), exclusionOf(t)].map(esc).join(","));
-  return "\uFEFF日期,類型,金額,商家/備註,分類,來源,成員,狀態,排除原因\n" + rows.map(r => r + "\n").join("");
+       statSource(t), owner(t), status(t), exclusionOf(t), nature(t)].map(esc).join(","));
+  return "\uFEFF日期,類型,金額,商家/備註,分類,來源,成員,狀態,排除原因,支出性質\n" + rows.map(r => r + "\n").join("");
 }
 
 /* ── 帳戶（Portfolio.kt assetGroup／forMember／PortfolioData／InvestSection） ── */
@@ -865,6 +913,11 @@ const appPassword = v => s(v).replace(/\s+/g, "");
 /** 整數欄位：只收純數字且在 [lo, hi]，否則 null（自動撈取的天數、提醒日、優先序…） */
 const intIn = (v, lo, hi) => { const t = s(v).trim(); return /^\d{1,9}$/.test(t) && +t >= lo && +t <= hi ? +t : null; };
 
+/** fix: 規則的日期區間白話：「（2026-11-16 起）」「（到 2026-11-16）」「（A ~ B）」；不限＝空字串 */
+function fixRangeText(r){
+  const f = r.date_from == null ? "" : dayOf(r.date_from), e = r.date_to == null ? "" : dayOf(r.date_to);
+  return f && e ? `（${f} ~ ${e}）` : f ? `（${f} 起）` : e ? `（到 ${e}）` : "";
+}
 /** 篩選器一行摘要（MainActivity.kt filterRuleSummary :2751）：條件 → 動作 */
 function filterRuleSummary(r, labels = []){
   const cond = [];
@@ -876,6 +929,7 @@ function filterRuleSummary(r, labels = []){
   const act = a === "use:skip" ? "→ 存款轉出不計"
             : a.startsWith("use:") ? `→ 存款轉出算「${labelOf(a.slice(4), labels)}」`
             : a.startsWith("cat:") ? `→ 分類「${labelOf(a.slice(4), labels)}」`
+            : a.startsWith("fix:") ? `→ 算${a === "fix:fixed" ? "固定" : "消費"}支出${fixRangeText(r)}`
             : a === "exclude" ? "→ 不納入收支" : a === "include" ? "→ 納入收支" : `→ ${a}`;
   return `${cond.join("、") || "所有交易"} ${act}`;
 }
@@ -950,7 +1004,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
   normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
-  INVEST_CAT, isFixedCat, catBucket, useLabel, isCardFeeText, catBucketLabel, acctSpends, acctUseOf, acctRuleKey, useRuleRow, financeRatios, missingBuiltins,
+  INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, acctSpends, acctUseOf, acctRuleKey, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;

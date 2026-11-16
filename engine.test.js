@@ -484,10 +484,10 @@ test("monthCsv：BOM、分類用 classifyF、疑似重複與排除原因、引�
   const rows = [tx("a", 100, "2026-02-01", "expense", "", "manual", { note: "午餐 \"便當\"", category_id: "c1", family_member_id: "m1" }),
                 tx("b", 200, "2026-02-03", "expense", "=HYPERLINK()", "email", { dedup_status: "suspect" })];
   const csv = E.monthCsv(rows, d, t => (t.id === "b" ? "你手動排除" : ""));
-  ok(csv.startsWith("\uFEFF日期,類型,金額,"), "BOM＋表頭");
+  ok(csv.startsWith("\uFEFF日期,類型,金額,") && csv.split("\n")[0].endsWith(",排除原因,支出性質"), "BOM＋表頭（最後一欄支出性質）");
   const lines = csv.trim().split("\n");
-  eq(lines[1], `2026-02-03,支出,200,"'=HYPERLINK()","${E.classify("=HYPERLINK()", [])}","email","","疑似重複","你手動排除"`);
-  eq(lines[2], `2026-02-01,支出,100,"午餐 ""便當""","🍜 飲食","手動記帳","阿明","",""`);
+  eq(lines[1], `2026-02-03,支出,200,"'=HYPERLINK()","${E.classify("=HYPERLINK()", [])}","email","","疑似重複","你手動排除","消費支出"`);
+  eq(lines[2], `2026-02-01,支出,100,"午餐 ""便當""","🍜 飲食","手動記帳","阿明","","","消費支出"`);
 });
 
 /* ── 帳戶 portfolio ── */
@@ -651,21 +651,106 @@ test("detailView：偽支出出現在消費清單與分類裡、看得出來源�
   eq(v.bank.rows.map(r => [r.a.id, !!r.spend, r.pending]).sort(), [["n1", true, false], ["n2", false, true]]);
   eq(E.detailView(d, E.Period.month(2026, 2), "m2", "2026-02-20").te, 0, "阿華的家用帳戶沒有已分用途的");
 });
-test("isFixedCat：內建預設、labels.fixed 覆寫（含改成自由）、📈 投資另歸投資", () => {
-  eq([E.isFixedCat("🛡️ 保險"), E.isFixedCat("🏡 房貸信貸"), E.isFixedCat("🧓 孝親"), E.isFixedCat("🍜 飲食"), E.isFixedCat("📦 其他")],
-    [true, true, true, false, false]);
-  eq(E.isFixedCat("🍜 飲食", [{ key: "🍜 飲食", fixed: true }]), true, "覆寫成固定");
-  eq(E.isFixedCat("🛡️ 保險", [{ key: "🛡️ 保險", fixed: false }]), false, "覆寫成自由");
-  eq(E.isFixedCat("🛡️ 保險", [{ key: "🛡️ 保險", fixed: null }]), true, "null＝內建預設");
-  eq([E.catBucket("📈 投資", []), E.catBucketLabel("🧓 孝親", [])], ["invest", "固定"]);
+/* ═══ 第六階段：每筆紀錄各自勾選「固定支出／消費支出」（紀錄 fixed ＞ fix: 規則 ＞ 預設三類） ═══ */
+const ex = (id, amount, merchant, extra = {}) => tx(id, amount, "2026-02-10", "expense", merchant, "email", extra);
+const ctx0 = { catRules: [], filterRules: [], cats: [] };
+const nat = (t, filters = []) => E.fixedInfo(t, { ...ctx0, filterRules: filters });
+
+test("支出性質 預設：只有房貸信貸／保險／教育是固定；孝親、稅務等預設消費；📈 投資歸投資", () => {
+  const cat = key => nat({ ...ex("t", 100, "x"), forcedCat: key });
+  eq(["🏡 房貸信貸", "🛡️ 保險", "📚 教育"].map(k => cat(k).bucket), ["fixed", "fixed", "fixed"]);
+  eq(["🧓 孝親", "🧾 稅務", "💊 醫療", "🚗 交通", "📱 電信", "🍜 飲食", "📦 其他"].map(k => cat(k).bucket), Array(7).fill("free"));
+  eq([cat("📈 投資").bucket, cat("📈 投資").fixed], ["invest", false], "投資不算固定也不算消費");
+  eq(cat("🛡️ 保險").by, "default");
+  eq([...E.FIXED_CATS].sort(), ["🏡 房貸信貸", "🛡️ 保險", "📚 教育"].sort());
 });
-test("ratios：固定／自由／投資／儲蓄、base=0 給 null、儲蓄為負、待分用途", () => {
-  const by = [["🏡 房貸信貸", 30000], ["🍜 飲食", 10000], ["📈 投資", 5000]];
-  const r = E.financeRatios(by, [], 100000, 45000, 20000, [{ amount: 300 }, { amount: 200 }]);
-  eq([r.fixed, r.free, r.invest, r.saving], [30000, 10000, 25000, 100000 - 45000 - 20000], "📈 分類歸投資，且不重複扣");
-  eq(r.pct, { fixed: 30, free: 10, invest: 25, saving: 35 }); eq(r.pending, { n: 2, sum: 500 });
-  eq(E.financeRatios(by, [], 0, 45000, 0, []).pct, { fixed: null, free: null, invest: null, saving: null });
-  eq(E.financeRatios([["🍜 飲食", 9000]], [], 5000, 9000, 0, []).saving, -4000, "儲蓄為負＝動用存款");
+test("支出性質：同一商家先後設了兩條 fix: 規則，後設的贏（與載入順序無關）", () => {
+  const old = filter("fix:fixed", { kw: "某補習班", created_at: "2026-10-01T00:00:00Z" });
+  const neu = filter("fix:free", { kw: "某補習班", date_from: "2026-11-01", created_at: "2026-11-02T00:00:00Z" });
+  const at = day => ({ ...tx("t", 3000, day, "expense", "某補習班") });
+  for (const rules of [[old, neu], [neu, old]]){
+    eq([nat(at("2026-11-05"), rules).bucket, nat(at("2026-10-05"), rules).bucket], ["free", "fixed"], "11 月起改消費；10 月照舊固定");
+  }
+});
+test("支出性質 優先序：紀錄 fixed ＞ fix: 規則 ＞ 預設；fixed=false 可把保險改成消費", () => {
+  const ins = { ...ex("t", 900, "某保險"), forcedCat: "🛡️ 保險" };
+  const toFree = filter("fix:free", { kw: "某保險" }), toFixed = filter("fix:fixed", { kw: "某保險" });
+  eq(nat(ins, [toFree]).bucket, "free", "規則蓋過預設");
+  eq(nat({ ...ins, fixed: true }, [toFree]).bucket, "fixed", "紀錄 fixed=true 蓋過規則");
+  eq(nat({ ...ins, fixed: false }).bucket, "free", "fixed=false 把保險改成消費");
+  eq(nat({ ...ins, fixed: false }, [toFixed]).bucket, "free", "紀錄 fixed=false 蓋過規則");
+  eq([nat({ ...ins, fixed: false }).by, nat(ins, [toFree]).by, nat(ins).by], ["record", "rule", "default"]);
+  const food = ex("f", 50, "全聯");
+  eq([nat(food, [filter("fix:fixed", { kw: "全聯" })]).bucket, E.isFixedTx(food, ctx0), E.bucketLabel(food, ctx0)], ["fixed", false, "消費支出"]);
+  eq(nat(food, [filter("fix:fixed", { kw: "全聯", priority: 2 }), filter("fix:free", { kw: "全聯", priority: 1 })]).bucket, "free", "第一條（優先序小）命中的算");
+  eq(nat(food, [{ ...filter("fix:fixed", { kw: "全聯" }), active: false }]).bucket, "free", "停用的規則不算");
+});
+test("支出性質 fix: 規則的日期區間：含頭含尾、只設一端、不設＝不限", () => {
+  const f = o => [filter("fix:fixed", { kw: "全聯", ...o })];
+  const at = d => ({ ...ex("t", 50, "全聯"), occurred_at: d });
+  eq(["2026-02-09", "2026-02-10", "2026-02-11"].map(d => nat(at(d), f({ date_from: "2026-02-10" })).fixed), [false, true, true], "只設起日（含）");
+  eq(["2026-02-09", "2026-02-10", "2026-02-11"].map(d => nat(at(d), f({ date_to: "2026-02-10" })).fixed), [true, true, false], "只設迄日（含）");
+  eq(["2026-02-09", "2026-02-10", "2026-02-12"].map(d => nat(at(d), f({ date_from: "2026-02-10", date_to: "2026-02-11" })).fixed), [false, true, false]);
+  eq(nat(at("2026-01-01"), f({})).fixed, true, "不設日期＝不限");
+  eq(nat(at("2026-02-10T08:30:00+08:00"), f({ date_to: "2026-02-10" })).fixed, true, "帶時間的 occurred_at 以日期比");
+});
+test("支出性質：fix: 規則不影響分類／排除／use:；use:／cat: 規則不影響支出性質", () => {
+  const fx = filter("fix:fixed", { kw: "全聯", priority: 1 }), cat = filter("cat:🍜 飲食", { kw: "全聯", priority: 2 });
+  const t1 = ex("t", 100, "全聯");
+  eq(E.classifyF(t1, [], [fx, cat]), "🍜 飲食", "fix: 排在前面也不遮蔽 cat:");
+  eq(E.classifyF(t1, [], [fx]), E.classify("全聯", []));
+  eq(E.txExclusionFilter(t1, [fx, filter("exclude", { kw: "全聯", priority: 2 })]).action, "exclude");
+  eq(E.effExcludeF(t1, new Map(), [], [fx])[0], false);
+  eq(E.matchFilterRule("全聯", "", "", 100, "expense", [fx]), null, "一般比對（want=null）跳過 fix:");
+  eq(E.matchFilterRule("全聯", "", "", 100, "expense", [fx], "fix").action, "fix:fixed");
+  eq(E.matchFilterRule("全聯", "", "", 100, "expense", [fx], "use"), null, "use 比對不吃 fix:");
+  const use = filter("use:🏡 房貸信貸", { kw: "全聯" });
+  eq(E.matchFilterRule("全聯", "", "", 100, "expense", [use], true).action, "use:🏡 房貸信貸", "舊呼叫 true 仍等同 use");
+  eq(nat(t1, [use, cat, filter("exclude", { kw: "全聯" })]).bucket, "free", "use:／cat:／exclude 都不影響支出性質");
+  eq(nat({ ...t1, forcedCat: "🛡️ 保險" }, [cat]).bucket, "fixed", "cat: 規則不影響支出性質（預設仍看分類）");
+});
+test("支出性質：存款轉出的偽支出帶 account_transactions.fixed、fix: 規則用 account＋kw＋金額", () => {
+  const a = out("x", -18000, "預約轉帳 房貸", { purpose: "🏡 房貸信貸" }), acc = { id: "A", name: "玉山(阿明)·活存 0123456" };
+  const row = E.acctOutRow(a, acc, [me]);
+  eq(row.fixed, null, "沒有 fixed 欄＝null（沒跑 v96 也不炸）");
+  eq(E.acctOutRow({ ...a, fixed: false }, acc, [me]).fixed, false);
+  eq(E.acctFixedInfo(a, acc, [me], "🏡 房貸信貸", ctx0).bucket, "fixed", "預設：房貸固定");
+  eq(E.acctFixedInfo({ ...a, fixed: false }, acc, [me], "🏡 房貸信貸", ctx0).bucket, "free", "手動改成消費");
+  eq(E.acctFixedInfo({ ...a, fixed: true }, acc, [me], "🍜 飲食", ctx0).bucket, "fixed", "手動改成固定");
+  const r = { ...E.acctFixRuleRow(a, acc, false, false, true), active: true };
+  eq([r.account, r.kw, r.amount_min, r.amount_max, r.direction, r.action, r.date_from, r.date_to],
+    ["3456", "預約轉帳 房貸", 18000, 18000, "expense", "fix:free", "2026-02-10", null]);
+  eq(E.acctFixedInfo(a, acc, [me], "🏡 房貸信貸", { ...ctx0, filterRules: [r] }).bucket, "free", "規則（帳戶尾碼）命中");
+  eq(E.acctFixedInfo({ ...a, amount: -17000 }, acc, [me], "🏡 房貸信貸", { ...ctx0, filterRules: [r] }).bucket, "fixed", "金額不符不命中");
+  const early = out("e", -18000, "預約轉帳 房貸", {}, "A", "2026-01-10");
+  eq(E.acctFixedInfo(early, acc, [me], "🏡 房貸信貸", { ...ctx0, filterRules: [r] }).bucket, "fixed", "只勾往後：更早的不受影響");
+});
+test("支出性質：之前／往後勾選決定 fix: 規則日期；交易表規則用商家原文", () => {
+  const t1 = ex("t", 100, " 全聯 ", { occurred_at: "2026-02-10T09:00:00" });
+  const r = (b, a) => E.fixRuleRow(t1, true, b, a);
+  eq([r(false, true).date_from, r(false, true).date_to], ["2026-02-10", null], "只勾往後");
+  eq([r(true, false).date_from, r(true, false).date_to], [null, "2026-02-10"], "只勾之前");
+  eq([r(true, true).date_from, r(true, true).date_to], [null, null], "兩個都勾＝不限");
+  eq([r(false, true).kw, r(false, true).action, r(false, true).direction], ["全聯", "fix:fixed", "expense"]);
+  eq(E.fixRuleRow(t1, false, false, true).action, "fix:free");
+  eq(nat({ ...t1, occurred_at: "2026-02-09" }, [{ ...r(false, true), active: true }]).fixed, false, "往後規則不影響更早的");
+  eq(nat({ ...t1, occurred_at: "2026-03-01" }, [{ ...r(false, true), active: true }]).fixed, true);
+});
+test("filterRuleSummary：fix: 規則顯示固定／消費支出與日期區間", () => {
+  eq(E.filterRuleSummary(filter("fix:fixed", { kw: "全聯", date_from: "2026-11-16" })), "含「全聯」 → 算固定支出（2026-11-16 起）");
+  eq(E.filterRuleSummary(filter("fix:free", { kw: "全聯", date_to: "2026-11-16" })), "含「全聯」 → 算消費支出（到 2026-11-16）");
+  eq(E.filterRuleSummary(filter("fix:fixed", { kw: "全聯", date_from: "2026-01-01", date_to: "2026-03-01" })), "含「全聯」 → 算固定支出（2026-01-01 ~ 2026-03-01）");
+  eq(E.filterRuleSummary(filter("fix:free", { kw: "全聯" })), "含「全聯」 → 算消費支出");
+});
+test("ratios 逐筆計算：同分類兩筆一固定一消費要分開算、📈 分類歸投資且不重複扣、base=0 給 null、儲蓄為負", () => {
+  const rows = [{ ...ex("a", 30000, "房貸"), forcedCat: "🏡 房貸信貸" }, { ...ex("b", 6000, "保險 A"), forcedCat: "🛡️ 保險" },
+    { ...ex("c", 4000, "保險 B", { fixed: false }), forcedCat: "🛡️ 保險" }, { ...ex("d", 5000, "股票", { fixed: true }), forcedCat: "📈 投資" }];
+  const r = E.financeRatios(rows, ctx0, 100000, 45000, 20000, [{ amount: 300 }, { amount: 200 }]);
+  eq([r.fixed, r.free, r.invest, r.saving], [36000, 4000, 25000, 100000 - 45000 - 20000], "同是保險：6000 固定、4000 消費；投資另算");
+  eq(r.pct, { fixed: 36, free: 4, invest: 25, saving: 35 }); eq(r.pending, { n: 2, sum: 500 });
+  eq(E.financeRatios(rows, ctx0, 0, 45000, 0, []).pct, { fixed: null, free: null, invest: null, saving: null });
+  eq(E.financeRatios([{ ...ex("e", 9000, "飯"), forcedCat: "🍜 飲食" }], ctx0, 5000, 9000, 0, []).saving, -4000, "儲蓄為負＝動用存款");
+  eq(E.financeRatios([ex("f", 70, "全聯")], { ...ctx0, filterRules: [filter("fix:fixed", { kw: "全聯" })] }, 1000, 70, 0, []).fixed, 70, "規則也生效");
 });
 test("analyze 回傳 ratios 與待分用途（只算本期、跟成員篩選）", () => {
   const d = spendFixture([out("n1", -18000, "房貸", { purpose: "🏡 房貸信貸" }), out("p1", -250, "領現金", {}, "H"),
@@ -699,6 +784,12 @@ test("明細銀行列：設成不計的轉出帶 use=skip（點下去開用途�
     E.Period.month(2026, 2), null, "2026-02-20");
   eq(v.bank.rows.map(x => [x.a.id, x.use]).sort(), [["s", "skip"], ["z", null]]);
 });
+test("monthCsv 支出性質欄：固定支出／消費支出／投資；非支出留空", () => {
+  const d = { members: [me], catRules: [], filterRules: [filter("fix:fixed", { kw: "房貸" })], cats: [], labels: [] };
+  const rows = [ex("a", 100, "某房貸"), ex("b", 200, "全聯"), { ...ex("c", 300, "股票"), forcedCat: "📈 投資" }, tx("d", 900, "2026-02-01", "income", "薪資")];
+  const cols = E.monthCsv(rows, d).trim().split("\n").slice(1).map(l => l.split(",").pop().replace(/"/g, ""));
+  eq(cols.sort(), ["", "固定支出", "投資", "消費支出"].sort());
+});
 test("用途規則：useRuleRow 產生的規則自己能命中同一筆；尾碼；摘要與標籤", () => {
   const a = out("x", -18000, "預約轉帳 房貸", {}, "A"), acc = { id: "A", name: "玉山(阿明)·活存 0123456" };
   const row = { ...E.useRuleRow(a, acc, "🏡 房貸信貸"), active: true };
@@ -707,7 +798,8 @@ test("用途規則：useRuleRow 產生的規則自己能命中同一筆；尾碼
   eq(E.acctUseOf({ ...a, amount: -17999 }, acc, [me], [row]), null);
   eq(E.acctRuleKey({ name: "示範·活存" }), "示範·活存", "沒有數字就用原名");
   eq(E.filterRuleSummary(filter("use:skip", { kw: "卡" })), "含「卡」 → 存款轉出不計");
-  eq(E.useLabel("🧓 孝親", []), "🧓 孝親·固定");
+  eq([E.useLabel("🧓 孝親", []), E.useLabel("🧓 孝親", [], "free"), E.useLabel("🛡️ 保險", [], "fixed"), E.useLabel("skip", [], "fixed")],
+    ["🧓 孝親", "🧓 孝親·消費", "🛡️ 保險·固定", "不計（轉帳）"], "尾巴依那一筆的判定，不給就不加");
 });
 test("新內建分類：🏡 房貸信貸、🧓 孝親 能分類；已有 labels 的家庭選單補上缺的內建分類", () => {
   eq([E.classify("某銀行房貸", []), E.classify("孝親費", [])], ["🏡 房貸信貸", "🧓 孝親"]);

@@ -161,13 +161,20 @@ function drawExpense(b, v){
   }
 }
 
+/** 列的小字行；固定支出的列前面加「固定」小標籤（消費不加，免得滿版標籤） */
+function subLine(r, text){
+  const sm = el("small");
+  if (!r.ex && r.nat && r.nat.bucket === "fixed") sm.appendChild(el("span", "tag", "固定"));
+  sm.appendChild(document.createTextNode(text));
+  return sm;
+}
 /** 支出單列（App ExpenseTxRow）：未計灰字刪除線＋白話原因；疑似重複可就地確認 */
 function expenseRow(r){
   const { t, ex, why, suspect } = r;
   const box = el("div", "li" + (ex ? " off" : ""));
   const main = el("button", "main");
   add(main, add(el("span", "m"), el("span", null, (suspect ? "⚠️ " : "") + title(t)),
-                el("small", null, `${t.occurred_at} · ${E.statSource(t)}` + (t.fromAcct ? "（存款轉出）" : "") + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : ""))),
+                subLine(r, `${t.occurred_at} · ${E.statSource(t)}` + (t.fromAcct ? "（存款轉出）" : "") + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : ""))),
       el("span", "a" + (ex || suspect ? " dim" : t.kind === "expense" ? " expense" : " income"), (t.kind === "expense" ? "−" : "＋") + nt(t.amount)));
   // 存款轉出算成的支出沒有交易表那一列可編輯：點開改它的「用途」
   main.addEventListener("click", () => (t.fromAcct ? purposeDialog(t.raw, S.accounts.find(a => a.id === t.raw.account_id)) : editTx(t, r)));
@@ -221,11 +228,11 @@ function drawBank(b, v){
   if (!bank.rows.length){ b.appendChild(el("p", "muted", "本期無存款帳戶交易（永豐綜合對帳單／玉山每日帳務）")); return; }
   b.appendChild(el("p", "note", `存入 ${nt(bank.inSum)}｜轉出/扣款 ${nt(bank.outSum)}　共 ${bank.rows.length} 筆` +
     "（灰字＝不計入收支，多為帳戶互轉、卡費扣繳、股票款）"));
-  for (const { a, ex, why, account, rule, spend, use, pending } of bank.rows){
+  for (const { a, ex, why, account, rule, spend, use, pending, nat } of bank.rows){
     const row = el("button", "main");
     const sub = el("small");
     if (ex && why) sub.appendChild(el("span", "tag", E.friendlyReason(why)));
-    if (spend) sub.appendChild(el("span", "tag", "算成 " + E.useLabel(spend.forcedCat, S.labels)));
+    if (spend) sub.appendChild(el("span", "tag", "算成 " + E.useLabel(spend.forcedCat, S.labels, nat && nat.bucket)));
     else if (use === "skip") sub.appendChild(el("span", "tag", E.useLabel(use, S.labels)));
     if (pending) sub.appendChild(el("span", "tag warn", "待分用途"));
     sub.appendChild(document.createTextNode(`${a.occurred_at} · ${account}`));
@@ -356,7 +363,47 @@ function editTx(t, st){
   });
   del.addEventListener("click", () => { d.close(); deleteDialog(t); });
   add(body, edit, add(el("div", "rowx"), exc, del));
-  if (t.kind === "expense"){ body.appendChild(tripSection(t)); body.appendChild(categorySection(t, d)); }
+  if (t.kind === "expense"){ body.appendChild(natureSection(t, d)); body.appendChild(tripSection(t)); body.appendChild(categorySection(t, d)); }
+}
+
+/** 支出性質：這一筆是「固定支出」還是「消費支出」（預設只有貸款、保險、學費算固定，分類不再綁定）。
+ *  一律寫這一筆的 transactions.fixed；勾的和目前判定不同時，可再勾「之前／往後相同的紀錄也比照」——
+ *  存成 fix: 規則（只勾往後＝從這筆日期起；只勾之前＝到這筆日期止；都勾＝不限日期）。
+ *  其他筆若各自手動勾過，仍以它們自己的為準（優先序：紀錄 ＞ 規則 ＞ 預設）。📈 投資的支出不分固定／消費。 */
+function natureSection(t, d){
+  const info = E.fixedInfo(t, S);
+  const sec = el("details", "dsec"), err = el("p", "warn");
+  if (info.bucket === "invest") return sec;   // 空的（不顯示）：投資另歸投資
+  sec.open = true;
+  const BASIS = { record: "這筆手動設定", rule: "規則", default: "預設" };
+  const cur = () => `${info.fixed ? "固定支出" : "消費支出"}（${BASIS[info.by]}）`;
+  const [box, chk] = checkbox("固定支出（沒勾＝消費支出）", info.fixed);
+  const [beforeBox, beforeChk] = checkbox("之前相同的紀錄也比照", false), [afterBox, afterChk] = checkbox("往後相同的紀錄也比照", false);
+  const save = el("button", "primary", "儲存支出性質"), scope = el("div");
+  // 商家空白不能記成規則（同分類的商家規則）：只能改這一筆
+  const canRule = String(t.merchant || "").trim() !== "";
+  add(scope, canRule ? beforeBox : null, canRule ? afterBox : null,
+    el("p", "note", canRule ? `「相同」＝商家是「${String(t.merchant).trim()}」的支出。若其他筆各自手動勾過，仍以它們自己的為準。`
+                            : "這筆沒有商家名，無法比照相同的紀錄；可用上面的「✏️ 編輯」補上名稱。"));
+  // 之前／往後一直看得到：這筆本來就對、只想讓其他相同紀錄比照時，不必先改一次再改回來
+  const check = () => { save.hidden = chk.checked === info.fixed && !(canRule && (beforeChk.checked || afterChk.checked)); };
+  for (const c of [chk, beforeChk, afterChk]) c.addEventListener("change", check);
+  const rule = info.rule ? `；規則：${E.filterRuleSummary(info.rule, S.labels)}` : "";
+  add(sec, add(el("summary", null, "支出性質"), el("small", null, `目前：${cur()}${rule}`)), box, scope, save, err);
+  check();
+  save.addEventListener("click", async () => {
+    const before = canRule && beforeChk.checked, after = canRule && afterChk.checked;
+    const fixed = chk.checked;
+    const ok = await busy([save, chk, beforeChk, afterChk], err, async () => {
+      if (fixed !== info.fixed) await Store.updateTx(t.id, { fixed });
+      if (before || after) await Store.addFilterRule(E.fixRuleRow(t, fixed, before, after)).catch(e => {
+        saved();   // 這筆已存：畫面先跟上，再報規則失敗
+        throw new Error(`這筆已設好，但規則沒存到（${plainError(e)}）`);
+      });
+    });
+    if (ok){ d.close(); saved(); }
+  });
+  return sec;
 }
 
 /** ✈️ 行程歸屬（App v78）：只影響「這趟花多少」，與「不納入收支」是兩回事。有行程才出現。 */
