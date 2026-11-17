@@ -1255,7 +1255,8 @@ function drawChart(cv, byCat){
     data: { labels: byCat.map(c => L(c[0])),
             datasets: [{ data: byCat.map(c => c[1]), backgroundColor: byCat.map((_, i) => pieColor(i)), borderWidth: 0 }] },
     options: { animation: false, plugins: { legend: { display: false },
-                          tooltip: { callbacks: { label: c => `${c.label} ${nt(c.raw)}（${pct(c.raw)}）` } } } } }));
+                          // 只留一行：色塊＋分類＋金額＋占比（標題列預設也會印分類名，會重複，關掉）
+                          tooltip: { callbacks: { title: () => "", label: c => `${c.label} ${nt(c.raw)}（${pct(c.raw)}）` } } } } }));
 }
 
 async function ignoreSub(merchant){
