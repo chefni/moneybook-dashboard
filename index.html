@@ -1322,7 +1322,7 @@ const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash
 /** 打開家計簿一律先到「帳戶」（使用者要求，2026-11-14；11-18 再提）。
  *  手機 App 被系統收掉後再點開，會用上次的網址（還帶著 #明細）重新載入——所以不能只看網址：
  *  離開不到 AWAY_MS（＝剛按重新整理、或切出去一下就回來）才留在原頁，否則一律回帳戶。 */
-const AWAY_MS = 2 * 60_000;
+const AWAY_MS = 60 * 60_000;   // 60 分鐘（醫師 2026-11-18 指定）
 const awayKey = "mb_hiddenAt";
 const markHidden = () => { try { localStorage.setItem(awayKey, String(Date.now())); } catch (_){ /* 私密模式：照樣能用，只是一律回帳戶 */ } };
 const awayLong = () => { try { return !(Date.now() - Number(localStorage.getItem(awayKey)) < AWAY_MS); } catch (_){ return true; } };
