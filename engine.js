@@ -381,6 +381,42 @@ function amortizePeriod(d, period, srcs, filters){
            prevTxs: amortize(d.prevTxs, srcs, filters, Period.startDate(pv), Period.endExclusive(pv)),
            range6: amortize(d.range6, srcs, filters, `${y5}-${pad(m5)}-01`, `${y1}-${pad(m1)}-01`) };
 }
+/** 從一大包資料切出一個期間要的 d（同網頁 fetchPeriod 的四段：本期非 merged、前期、近 6 月、存款寬窗），再套攤提。
+ *  bulk＝{ txs: 交易（任何 dedup_status 都可，這裡會篩）, acct: 存款流水 }；srcs＝攤提來源。
+ *  分析頁「總覽」的收支比較逐月用它，示範模式的每個期間也用它（同一份切法，數字才會跟區間分析一致） */
+function periodFromBulk(bulk, p, srcs, filters){
+  const inR = (x, a, b) => x.occurred_at >= a && x.occurred_at < b;
+  const pv = Period.prev(p), an = Period.anchorMonth(p);
+  const [y5, m5] = ymAdd(an.y, an.m, -5), [y1, m1] = ymAdd(an.y, an.m, 1);
+  const live = bulk.txs.filter(t => t.dedup_status !== "merged"), uniq = live.filter(t => t.dedup_status === "unique");
+  const txsAll = live.filter(t => inR(t, Period.startDate(p), Period.endExclusive(p)));
+  const [wa, wb] = Period.acctWindow(p);
+  return amortizePeriod({ txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"),
+    prevTxs: uniq.filter(t => inR(t, Period.startDate(pv), Period.endExclusive(pv))),
+    range6: uniq.filter(t => inR(t, `${ymKey(y5, m5)}-01`, `${ymKey(y1, m1)}-01`)),
+    acctTxnsWide: bulk.acct.filter(t => inR(t, wa, wb)) }, p, srcs, filters);
+}
+/** 收支比較：from 月到 to 月（含）逐月跑 analyze，數字＝區間分析頁選那個月看到的「收入（全部來源）」與「支出」。
+ *  base＝不隨期間的設定（網頁的 S）；回 [{ y, m, ti, te, r }]，r 是那個月完整的 analyze 結果（定期區塊要用） */
+function monthlySeries(base, bulk, from, to, sel, srcs, today = todayIso()){
+  const out = [];
+  for (let [y, m] = [from.y, from.m]; ymKey(y, m) <= ymKey(to.y, to.m); [y, m] = ymAdd(y, m, 1)){
+    const p = Period.month(y, m);
+    const r = analyze({ ...base, ...periodFromBulk(bulk, p, srcs, base.filterRules) }, p, sel, today);
+    out.push({ y, m, ti: r.ti, te: r.te, r });
+  }
+  return out;
+}
+/** 逐月數列 → 逐年合計；months＝那年有資料的月數（不滿 12 個月的年份畫面要註明） */
+function yearlyTotals(series){
+  const by = new Map();
+  for (const x of series){
+    const a = by.get(x.y) || { y: x.y, ti: 0, te: 0, from: x.m, to: x.m, months: 0 };
+    a.ti += x.ti; a.te += x.te; a.to = x.m; a.months++;
+    by.set(x.y, a);
+  }
+  return [...by.values()];
+}
 /** 白話：給了 t 就寫實際月份（2026-11 ～ 2027-10），沒給（規則）就寫相對付款月 */
 function amortLabel(n, off = 0, t = null){
   if (n < 2) return "不攤提";
@@ -1089,7 +1125,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
   normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
-  amortInfo, amortSlices, amortize, amortizePeriod, amortLabel, amortAction, amortMonth, parseAmort, AMORT_MAX,
+  amortInfo, amortSlices, amortize, amortizePeriod, periodFromBulk, monthlySeries, yearlyTotals, amortLabel, amortAction, amortMonth, parseAmort, AMORT_MAX,
   INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, bankNoteText, acctSpends, acctUseOf, acctRuleKey, acctRuleSource, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;

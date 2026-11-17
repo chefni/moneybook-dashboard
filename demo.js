@@ -144,16 +144,9 @@ const demoHex = () => [...crypto.getRandomValues(new Uint8Array(4))].map(x => x.
 
 /** 一個期間的資料（同 index.html loadPeriod 的形狀） */
 function demoPeriod(p){
-  const a = E.Period.startDate(p), b = E.Period.endExclusive(p), pv = E.Period.prev(p), an = E.Period.anchorMonth(p);
-  const [y5, m5] = E.ymAdd(an.y, an.m, -5), [y1, m1] = E.ymAdd(an.y, an.m, 1);
-  const inR = (x, s, e) => x.occurred_at >= s && x.occurred_at < e;
-  const live = DEMO_DATA.txs.filter(t => t.dedup_status !== "merged"), uniq = live.filter(t => t.dedup_status === "unique");
-  const txsAll = live.filter(t => inR(t, a, b));
-  const d = { txsAll, txs: txsAll.filter(t => t.dedup_status === "unique"),
-              prevTxs: uniq.filter(t => inR(t, E.Period.startDate(pv), E.Period.endExclusive(pv))),
-              range6: uniq.filter(t => inR(t, `${y5}-${pad(m5)}-01`, `${y1}-${pad(m1)}-01`)),
-              acctTxnsWide: DEMO_DATA.acct.filter(t => inR(t, ...E.Period.acctWindow(p))) };
-  return E.amortizePeriod(d, p, uniq, S.filterRules);   // 示範資料全在記憶體：整份當攤提來源
+  // 示範資料全在記憶體：整份當攤提來源；切法與分析頁總覽共用 engine periodFromBulk
+  const uniq = DEMO_DATA.txs.filter(t => t.dedup_status === "unique");
+  return E.periodFromBulk({ txs: DEMO_DATA.txs, acct: DEMO_DATA.acct }, p, uniq, S.filterRules);
 }
 function buildDemo(){
   uid = "u1";   // 示範登入者＝爸爸（記一筆預設算他的）

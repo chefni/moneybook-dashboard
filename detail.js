@@ -12,7 +12,7 @@
 /** 明細頁的畫面狀態：換期間、重抓都保留（同 App） */
 const DV = {
   view: "expense",       // expense／income／bank／excluded
-  flat: false,           // 支出：依分類（false）或依日期（true）
+  mode: "cat",           // 支出：依分類 cat／依日期 date／依必要性 need（📐 收入去向的固定／消費／投資）
   open: new Set(),       // 展開的分組
   q: "", found: null, searchErr: "", seq: 0, timer: 0,   // 跨月搜尋
   aged: null, agedStale: true,   // 超過 45 天沒對到帳單的刷卡通知（全家、不隨期間）；重抓時先留著舊的，新的到了再換
@@ -150,38 +150,57 @@ function drawExpense(b, v){
     b.appendChild(el("p", "note", `其中 ${E.compactNt(v.provisional)} 尚未對帳（來自刷卡通知），帳單到會自動校正金額`));
   add(b, el("p", "note", `支出 ${nt(v.te)} · 共 ${v.expRows.length} 筆 · 點分類展開、點單筆改分類/編輯/不納入`));
   const mode = el("div", "chips");
-  for (const [flat, label] of [[false, "依分類"], [true, "依日期"]]){
-    const c = el("button", "chip" + (DV.flat === flat ? " active" : ""), label);
-    c.setAttribute("aria-pressed", String(DV.flat === flat));
-    c.addEventListener("click", () => { DV.flat = flat; drawBody(); });
+  for (const [m, label] of [["cat", "依分類"], ["date", "依日期"], ["need", "依必要性"]]){
+    const c = el("button", "chip" + (DV.mode === m ? " active" : ""), label);
+    c.setAttribute("aria-pressed", String(DV.mode === m));
+    c.addEventListener("click", () => { DV.mode = m; drawBody(); });
     mode.appendChild(c);
   }
   b.appendChild(mode);
-  if (DV.flat){ for (const r of v.expRows) b.appendChild(expenseRow(r)); return; }
-  catChart(b, v);
-  const marks = catMarks(v.byCat);
-  for (const g of v.groups){
-    const key = "exp:" + g.key;
-    b.appendChild(groupHead(key, E.labelOf(g.key, S.labels), g, "", marks.get(g.key) || { color: null, pct: null }));
+  if (DV.mode === "date"){ for (const r of v.expRows) b.appendChild(expenseRow(r)); return; }
+  // 依分類／依必要性：上面圓餅、下面可展開的分組（色塊與占比在分組標題列，與圓餅同色）
+  const need = DV.mode === "need";
+  const groups = need ? needGroups(v.expRows) : v.groups;
+  const slices = need ? groups.filter(g => g.total > 0).map(g => [g.key, g.total]) : v.byCat;
+  const nameOf = need ? k => NEED_LABEL[k] : k => E.labelOf(k, S.labels);
+  if (need) b.appendChild(el("p", "note", "必要性＝📐 收入去向的分法。預設只有貸款、保險、學費、孝親算固定，其餘算消費；點單筆可自己改固定／消費。"));
+  pieChart(b, slices, nameOf);
+  const marks = pieMarks(slices);
+  for (const g of groups){
+    const key = (need ? "need:" : "exp:") + g.key;
+    b.appendChild(groupHead(key, nameOf(g.key), g, "", marks.get(g.key) || { color: null, pct: null }));
     if (DV.open.has(key)) for (const r of g.rows) b.appendChild(expenseRow(r));
   }
 }
 
-/** 「依分類」上方的圓餅圖（原本分析頁的「圖表與分類」併進來；2026-11-18 醫師要求只留圓餅）。
- *  不另列圖例：每個分類的色塊與占比直接放在下面的分類標題列（catMarks），圖與清單一眼對得上 */
-function catChart(b, v){
-  if (!v.byCat.length) return;
+/** 必要性（📐 收入去向的桶）：固定支出／消費支出／投資。每列的桶早已算好（r.nat＝fixedInfo），這裡只分組；
+ *  合計與「未計」的定義同依分類（engine detailView：疑似重複、不納入的列列出但不算） */
+const NEED_LABEL = { fixed: "📌 固定支出", free: "🛍️ 消費支出", invest: "📈 投資" };
+function needGroups(rows){
+  const counts = r => !r.ex && !r.suspect;
+  const gm = new Map(Object.keys(NEED_LABEL).map(k => [k, []]));
+  for (const r of rows) gm.get(r.nat && gm.has(r.nat.bucket) ? r.nat.bucket : "free").push(r);
+  return [...gm].filter(([, rs]) => rs.length).map(([key, rs]) => ({ key, rows: rs,
+      total: rs.filter(counts).reduce((a, r) => a + r.t.amount, 0),
+      off: rs.filter(r => !counts(r)).length, suspect: rs.filter(r => r.suspect).length }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/** 分組上方的圓餅圖（原本分析頁的「圖表與分類」併進來；2026-11-18 醫師要求只留圓餅）。
+ *  slices＝[[key, 金額]]（大的在前）；不另列圖例：色塊與占比直接放在下面的分組標題列（pieMarks），圖與清單一眼對得上 */
+function pieChart(b, slices, nameOf){
+  if (!slices.length) return;
   if (!window.Chart){ b.appendChild(el("p", "warn", "圖表程式庫沒載入（可能網路不穩），下方數字不受影響。")); return; }
   const cv = el("canvas");
   cv.setAttribute("role", "img");
-  cv.setAttribute("aria-label", "支出圓餅圖（各分類金額與占比見下方清單）");
+  cv.setAttribute("aria-label", "支出圓餅圖（各組金額與占比見下方清單）");
   add(b, add(el("div", "cwrap"), cv));
-  requestAnimationFrame(() => drawChart(cv, v.byCat));
+  requestAnimationFrame(() => drawChart(cv, slices, nameOf));
 }
-/** 分類 key → { color: 圓餅上的顏色, pct: 占比 }（顏色依 byCat 的順序取，跟 drawChart 同一套）；全部未計的分類不在圓餅裡 */
-function catMarks(byCat){
-  const tot = byCat.reduce((a, c) => a + c[1], 0);
-  return new Map(byCat.map(([k, amt], i) => [k, { color: pieColor(i), pct: tot > 0 ? Math.round(amt * 100 / tot) : 0 }]));
+/** 分組 key → { color: 圓餅上的顏色, pct: 占比 }（顏色依 slices 的順序取，跟 drawChart 同一套）；全部未計的分組不在圓餅裡 */
+function pieMarks(slices){
+  const tot = slices.reduce((a, c) => a + c[1], 0);
+  return new Map(slices.map(([k, amt], i) => [k, { color: pieColor(i), pct: tot > 0 ? Math.round(amt * 100 / tot) : 0 }]));
 }
 
 /** 列的小字行；固定支出的列前面加「固定」小標籤（消費不加，免得滿版標籤） */

@@ -43,8 +43,8 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=57bcb5a098"></script>
-<script defer src="detail.js?v=b78b3568ad"></script>
+<script defer src="engine.js?v=6685cb4f28"></script>
+<script defer src="detail.js?v=09241fbd2c"></script>
 <script defer src="accounts.js?v=c63bff279a"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
@@ -134,6 +134,13 @@
   .mv .h { color:var(--sub); font-size:12px; }
   .mv .n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mv .a { text-align:right; }
+  /* 📈 收支比較的清單：期間｜收入｜支出｜結餘，每列可點（去區間分析） */
+  .cmpg .cr { display:grid; grid-template-columns:minmax(0,1.3fr) 1fr 1fr 1fr; gap:6px; width:100%; align-items:baseline;
+              border:none; border-bottom:1px solid var(--line); border-radius:0; background:none; padding:8px 0; font-size:13px; text-align:right; }
+  .cmpg .cr > span { white-space:nowrap; }
+  .cmpg .cr > span:first-child { text-align:left; white-space:normal; }
+  .cmpg .cr.h { color:var(--sub); font-size:12px; padding:4px 0; }
+  .fold h4 { margin:14px 0 4px; font-size:14px; }
 
   .srcrow { display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; }
   .srccard { flex:0 0 auto; text-align:left; padding:10px 12px; border-radius:12px; }
@@ -331,6 +338,7 @@
   <p class="muted" id="syncMsg" role="status" aria-live="polite"></p>
   <p class="warn" id="netMsg" role="alert" hidden></p>
   <div class="chips" id="chips"></div>
+  <div class="chips" id="anaTabs" role="group" aria-label="分析頁分頁" hidden></div>   <!-- 分析頁：📈 總覽／📅 區間分析 -->
 
   <!-- 期間列：明細與分析共用同一個期間；帳戶頁不用（餘額看最新快照） -->
   <div id="periodBox">
@@ -400,7 +408,11 @@ const S = {                  // 不隨期間變的設定類資料
 };
 const periodCache = new Map();   // 期間 key → Promise<{ txsAll（本期非 merged）, txs（其中 unique）, prevTxs, range6, acctTxnsWide }>
 const openSec = new Map();       // 各區開合狀態（換期間不會被洗回收合，同 App v93）
-const ui = { cardSrc: null, bars: new Set() };
+const ui = { cardSrc: null, bars: new Set(),
+  ana: "overview",   // 分析頁的分頁：overview 總覽（收支比較／旅遊／定期，不看期間）／range 區間分析（期間列＋原本各區）
+  cmp: "month",      // 收支比較：按月 month／按年 year
+  regM: 0 };         // 定期：0＝本月、1＝上月
+openSec.set("cmp", true);   // 收支比較是總覽的第一欄，預設展開
 let charts = [];
 
 /* ═══════════ 畫面切換 ═══════════ */
@@ -648,15 +660,16 @@ function paint(d, p){
 }
 
 /* ═══════════ 📊 分析頁 ═══════════ */
+/** 分析頁有兩個分頁（2026-11-18 醫師要求）：📈 總覽（收支比較、旅遊、定期）與 📅 區間分析（期間列＋原本各區，不含旅遊） */
 function paintAnalysis(d, p){
-  const r = E.analyze({ ...S, ...d }, p, sel);
-  const L = k => E.labelOf(k, S.labels);
   const root = $("sections");
   root.replaceChildren();
+  if (ui.ana === "overview"){ paintOverview(root); return; }
+  const r = E.analyze({ ...S, ...d }, p, sel);
+  const L = k => E.labelOf(k, S.labels);
   const mineN = sel == null ? d.txs.length : d.txs.filter(t => E.txOwnerId(t, S.members) === sel).length;
   if (!mineN && !r.income.length && !r.exp.length){   // 同 App：依成員篩選後判斷
     root.appendChild(add(el("div", "card"), el("p", "muted", "本期尚無資料")));
-    root.appendChild(tripFold());     // 旅遊跟期間無關，照樣可以看
     return;
   }
   const { te, prevTe, ti } = r;
@@ -716,9 +729,7 @@ function paintAnalysis(d, p){
   }
 
   const byCat = r.byCat;   // 圖表與分類已併進「🧾 明細 → 支出 → 依分類」；下方預算仍要用
-
-  // ── ✈️ 旅遊：跨月的行程總花費，與上方「本期」無關；收合時不載入（同 App v93） ──
-  root.appendChild(tripFold());
+  // （✈️ 旅遊跟期間無關，搬到「📈 總覽」分頁）
 
   // ── 本月預算（預算是全家、整月的；看單一成員或自訂區間時拿來比會誤導，改成說明） ──
   const budgeted = S.labels.filter(l => (l.budget || 0) > 0).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
@@ -782,18 +793,7 @@ function paintAnalysis(d, p){
 
   // ── 🔁 定期扣款 / 訂閱 ──
   if (r.subs.length){
-    root.appendChild(fold("subs", "🔁 定期扣款 / 訂閱",
-      `${r.subs.length} 項 · 估每月約 ${nt(r.subs.reduce((a, s) => a + s.amount, 0))}`, b => {
-        add(b, el("p", "note", "每月同金額、同日期固定扣款的商家（停車、超商等按次消費已排除）。不是訂閱就點「非訂閱」移除並記住。"));
-        if (S.subIgnoreErr) add(b, el("p", "warn", "⚠️ 讀不到已設定的「非訂閱」清單，先前移除的項目可能又出現；重新整理再試。"));
-        for (const s of r.subs){
-          const m = add(el("div", "m"), el("div", null, s.merchant),
-            el("div", "muted", `連續 ${s.months} 個月同額同日 · 最近 ${s.lastDate}`));
-          const btn = el("button", "link", "非訂閱");
-          btn.addEventListener("click", () => ignoreSub(s.merchant));
-          b.appendChild(add(el("div", "sub"), m, el("span", null, `約 ${nt(s.amount)}/月`), btn));
-        }
-      }));
+    root.appendChild(fold("subs", "🔁 定期扣款 / 訂閱", subsSummary(r.subs), b => subsList(b, r.subs)));
   }
 
   // ── 🚫 已排除（未計入收支） ──
@@ -804,6 +804,172 @@ function paintAnalysis(d, p){
           el("span", "r", x.reason), el("span", "a", nt(x.amount))));
     }));
   }
+}
+
+/** 🔁 定期扣款／訂閱清單（區間分析與總覽的「定期」共用） */
+const subsSummary = subs => `${subs.length} 項 · 估每月約 ${nt(subs.reduce((a, s) => a + s.amount, 0))}`;
+function subsList(b, subs){
+  add(b, el("p", "note", "每月同金額、同日期固定扣款的商家（停車、超商等按次消費已排除）。不是訂閱就點「非訂閱」移除並記住。"));
+  if (S.subIgnoreErr) add(b, el("p", "warn", "⚠️ 讀不到已設定的「非訂閱」清單，先前移除的項目可能又出現；重新整理再試。"));
+  for (const s of subs){
+    const m = add(el("div", "m"), el("div", null, s.merchant),
+      el("div", "muted", `連續 ${s.months} 個月同額同日 · 最近 ${s.lastDate}`));
+    const btn = el("button", "link", "非訂閱");
+    btn.addEventListener("click", () => ignoreSub(s.merchant));
+    b.appendChild(add(el("div", "sub"), m, el("span", null, `約 ${nt(s.amount)}/月`), btn));
+  }
+}
+
+/* ═══════════ 📈 分析頁「總覽」：收支比較（按月／按年）、✈️ 旅遊、🔁 定期 ═══════════ */
+// 收支比較要每個月的數字：一次抓全部交易與存款流水（目前約數千筆），再逐月用 engine 同一套算法切、算
+// （engine.monthlySeries＝每月各跑一次 analyze），所以這裡的每月數字＝區間分析選那個月看到的。
+// 跟旅遊一樣：要用到才載入、重抓期間保留舊的；資料有更新（refreshData）就標 dirty。
+let bulkState = null, bulkLoading = false, bulkErr = "", bulkDirty = false;
+const seriesCache = new Map();   // 成員篩選（sel）→ 逐月數列；bulk 換了就清
+async function loadBulk(){
+  const [txs, acct] = await Promise.all([Store.txAll("2000-01-01", "2100-01-01"), Store.acct("2000-01-01", "2100-01-01")]);
+  return { txs, acct };
+}
+function ensureBulk(){
+  if (bulkLoading || (bulkState && !bulkDirty)) return;
+  bulkLoading = true; bulkDirty = false;
+  loadBulk().then(s => { bulkState = s; bulkErr = ""; seriesCache.clear(); }, e => { bulkErr = "讀取全部紀錄失敗：" + (e.message || e); })
+            .finally(() => { bulkLoading = false; if (bulkDirty) ensureBulk(); repaint(); });
+}
+/** 目前成員篩選的逐月數列（資料第一個月 → 本月）；還沒載入回 null、完全沒資料回 [] */
+function seriesFor(){
+  if (!bulkState) return null;
+  const k = String(sel);
+  if (!seriesCache.has(k)){
+    const first = [...bulkState.txs, ...bulkState.acct].reduce((a, t) => (t.occurred_at < a ? t.occurred_at : a), "9999");
+    const now = thisMonth();
+    const from = first === "9999" ? now : { y: +first.slice(0, 4), m: +first.slice(5, 7) };
+    // 攤提來源＝全部 unique 交易（同示範模式：資料都在手上，engine 自己挑設了攤提或對到 amort: 規則的）
+    const srcs = bulkState.txs.filter(t => t.dedup_status === "unique");
+    seriesCache.set(k, first === "9999" ? [] : E.monthlySeries(S, bulkState, from, now, sel, srcs));
+  }
+  return seriesCache.get(k);
+}
+
+function paintOverview(root){
+  if ((openSec.get("cmp") || openSec.get("reg")) && (bulkDirty || !bulkState)) ensureBulk();
+  const series = seriesFor();
+  const cur = series && series[series.length - 1];
+  root.appendChild(fold("cmp", "📈 收支比較",
+    cur ? `本月至今：收入 ${nt(cur.ti)} · 支出 ${nt(cur.te)}` : "按月或按年比較收入與支出", b => paintCompare(b, series)));
+  root.appendChild(tripFold());
+  root.appendChild(fold("reg", "🔁 定期（固定支出・攤提・定期扣款／訂閱）",
+    cur ? `本月固定支出 ${nt(cur.r.ratios.fixed)} · 訂閱 ${cur.r.subs.length} 項` : "每月都會出現的支出（點開才載入）",
+    b => paintRegular(b, series)));
+}
+/** 載入中／失敗的共用提示；回 true＝還不能畫內容 */
+function bulkPending(b, series){
+  if (bulkErr && !bulkState){
+    const r = el("button", null, "重試");
+    r.addEventListener("click", () => { bulkErr = ""; bulkDirty = true; ensureBulk(); repaint(); });
+    add(b, el("p", "warn", bulkErr), r);
+    return true;
+  }
+  if (!series){ b.appendChild(el("p", "muted", "讀取全部紀錄中…（第一次要幾秒）")); return true; }
+  if (!series.length){ b.appendChild(el("p", "muted", "還沒有任何紀錄")); return true; }
+  if (bulkLoading) b.appendChild(el("p", "muted", "更新中…"));
+  return false;
+}
+
+function paintCompare(b, series){
+  if (bulkPending(b, series)) return;
+  const mode = el("div", "chips");
+  for (const [v, label] of [["month", "按月"], ["year", "按年"]]){
+    const c = el("button", "chip" + (ui.cmp === v ? " active" : ""), label);
+    c.setAttribute("aria-pressed", String(ui.cmp === v));
+    c.addEventListener("click", () => { ui.cmp = v; repaint(); });
+    mode.appendChild(c);
+  }
+  b.appendChild(mode);
+  const now = thisMonth(), today = E.todayIso();
+  // 每一列：標籤、圖上的短標籤、收入、支出、點了要去的區間（區間分析）
+  const rows = ui.cmp === "month"
+    ? series.slice(-12).map(x => ({ label: `${x.y}/${pad(x.m)}${x.y === now.y && x.m === now.m ? "（至今）" : ""}`,
+        short: `${String(x.y).slice(2)}/${pad(x.m)}`, ti: x.ti, te: x.te, period: E.Period.month(x.y, x.m) }))
+    : E.yearlyTotals(series).map(a => ({
+        label: `${a.y} 年` + (a.months < 12 ? `（${a.from}～${a.to} 月${a.y === now.y ? "，至今" : ""}）` : ""),
+        short: String(a.y), ti: a.ti, te: a.te,
+        period: E.Period.range(`${a.y}-${pad(a.from)}-01`, a.y === now.y ? today : E.addDays(`${a.y + (a.to === 12 ? 1 : 0)}-${pad(a.to === 12 ? 1 : a.to + 1)}-01`, -1)) }));
+  if (window.Chart){
+    const cv = el("canvas");
+    cv.setAttribute("role", "img");
+    cv.setAttribute("aria-label", "收入與支出比較長條圖（數字見下方清單）");
+    add(b, add(el("div", "cwrap"), cv));
+    requestAnimationFrame(() => drawCompare(cv, rows));
+  }
+  b.appendChild(el("p", "note", "收入＝全部來源（自家互轉、退款已排除）；支出＝明細頁算進來的支出。點一列看那段期間的區間分析。"));
+  // 手機寬度放不下四欄「NT$」：清單只寫數字（欄名已說明是金額），每格不換行
+  const num = v => Math.round(v).toLocaleString("en-US");
+  const g = add(el("div", "cmpg"), add(el("div", "cr h"), el("span", null, "期間"), el("span", null, "收入"), el("span", null, "支出"), el("span", null, "結餘")));
+  for (const x of rows.slice().reverse()){   // 清單新的在上；圖是舊到新
+    const net = x.ti - x.te;
+    const r = add(el("button", "cr"), el("span", null, x.label), el("span", "income", num(x.ti)), el("span", "expense", num(x.te)),
+      el("span", net >= 0 ? "income" : "expense", (net >= 0 ? "+" : "−") + num(Math.abs(net))));
+    r.addEventListener("click", () => { ui.ana = "range"; applyTab(); window.scrollTo(0, 0); setPeriod(x.period); });
+    g.appendChild(r);
+  }
+  b.appendChild(g);
+}
+function drawCompare(cv, rows){
+  if (!window.Chart || !cv.isConnected) return;
+  const sub = css("--sub"), ink = css("--ink");
+  charts.push(new Chart(cv, { type: "bar",
+    data: { labels: rows.map(x => x.short),
+            datasets: [{ label: "收入", data: rows.map(x => x.ti), backgroundColor: "#10ac84", borderRadius: 3 },
+                       { label: "支出", data: rows.map(x => x.te), backgroundColor: "#ee5253", borderRadius: 3 }] },
+    options: { animation: false, plugins: { legend: { position: "bottom", labels: { color: ink, boxWidth: 12 } },
+                 tooltip: { callbacks: { label: c => `${c.dataset.label} ${nt(c.raw)}` } } },
+               scales: { x: { ticks: { color: sub } }, y: { ticks: { color: sub, callback: v => E.compactNt(v) } } } } }));
+}
+
+/** 🔁 定期：本月／上月的固定支出（依分類）、攤提中的支出、定期扣款／訂閱 */
+function paintRegular(b, series){
+  if (bulkPending(b, series)) return;
+  const pick = el("div", "chips");
+  [0, 1].forEach(i => {
+    const x = series[series.length - 1 - i];
+    if (!x) return;
+    const c = el("button", "chip" + (ui.regM === i ? " active" : ""), `${i ? "上月" : "本月"}（${x.m} 月）`);
+    c.setAttribute("aria-pressed", String(ui.regM === i));
+    c.addEventListener("click", () => { ui.regM = i; repaint(); });
+    pick.appendChild(c);
+  });
+  b.appendChild(pick);
+  const x = series[series.length - 1 - ui.regM] || series[series.length - 1];
+  const r = x.r, L = k => E.labelOf(k, S.labels);
+  if (ui.regM === 0) b.appendChild(el("p", "note", "本月還沒過完：月底的扣款、還沒寄來的對帳單（例如永豐存款）之後才會補上。"));
+
+  // 📌 固定支出（依分類，點開逐筆）
+  const fixed = r.ratios.rows.fixed;
+  b.appendChild(el("h4", null, `📌 固定支出 ${nt(r.ratios.fixed)}（${fixed.length} 筆）`));
+  if (!fixed.length) b.appendChild(el("p", "muted", "這個月還沒有固定支出"));
+  const byCat = new Map();
+  for (const t of fixed){ const k = E.classifyF(t, S.catRules, S.filterRules, S.cats); byCat.set(k, (byCat.get(k) || []).concat(t)); }
+  const cats = [...byCat].map(([k, list]) => [k, list, list.reduce((a, t) => a + t.amount, 0)]).sort((a, z) => z[2] - a[2]);
+  for (const [k, list, amt] of cats){
+    const key = `reg:${x.y}-${x.m}:${k}`;
+    b.appendChild(sbar(L(k), amt, cats[0][2], r.ratios.fixed, { onClick: () => toggleBar(key) }));
+    if (ui.bars.has(key)) b.appendChild(detail(list, amt));
+  }
+
+  // 📆 攤提中（大筆支出分到多個月，這個月分到的那一份）
+  const am = r.exp.filter(t => t.amort);
+  b.appendChild(el("h4", null, `📆 攤提中 ${am.length ? nt(am.reduce((a, t) => a + t.amount, 0)) : ""}（${am.length} 筆）`));
+  if (!am.length) b.appendChild(el("p", "muted", "這個月沒有攤提中的支出（明細點一筆大額支出可設攤提）"));
+  for (const t of am)
+    b.appendChild(add(el("div", "sub"),
+      add(el("div", "m"), el("div", null, t.merchant || t.note || "（無名稱）"),
+          el("div", "muted", `第 ${t.amort.k}/${t.amort.N} 期 · 原 ${nt(t.amort.total)}（${t.amort.src.occurred_at.slice(0, 7)} 付）`)),
+      el("span", null, `${nt(t.amount)}/月`)));
+
+  // 🔁 定期扣款／訂閱
+  b.appendChild(el("h4", null, `🔁 定期扣款／訂閱（${subsSummary(r.subs)}）`));
+  if (r.subs.length) subsList(b, r.subs); else b.appendChild(el("p", "muted", "沒有偵測到定期扣款"));
 }
 
 /* ═══════════ ✈️ 旅遊（Trips.kt）：行程＝日期區間＋單筆例外（trip_tx） ═══════════ */
@@ -1245,10 +1411,10 @@ let Store = LiveStore;
 const PIE_COLORS = ["#0abde3", "#feca57", "#5f27cd", "#ff9f43", "#54a0ff", "#01a3a4", "#f368e0",
                     "#576574", "#3ae374", "#ee5253", "#10ac84", "#8395a7", "#e77f67", "#786fa6"];
 const pieColor = i => PIE_COLORS[i % PIE_COLORS.length];
-/** 明細「依分類」的支出圓餅。不畫圖例：色塊與占比在下面各分類標題列（detail.js catMarks，顏色同用 pieColor） */
-function drawChart(cv, byCat){
+/** 明細「依分類／依必要性」的支出圓餅。byCat＝[[key, 金額]]，L＝key 的顯示名。
+ *  不畫圖例：色塊與占比在下面各分組標題列（detail.js pieMarks，顏色同用 pieColor） */
+function drawChart(cv, byCat, L = k => E.labelOf(k, S.labels)){
   if (!window.Chart || !cv.isConnected) return;
-  const L = k => E.labelOf(k, S.labels);
   const tot = byCat.reduce((a, c) => a + c[1], 0);
   const pct = v => (tot > 0 ? Math.round(v * 100 / tot) : 0) + "%";   // 四捨五入，同 App 圓餅
   charts.push(new Chart(cv, { type: "doughnut",
@@ -1328,13 +1494,27 @@ const awayKey = "mb_hiddenAt";
 const markHidden = () => { try { localStorage.setItem(awayKey, String(Date.now())); } catch (_){ /* 私密模式：照樣能用，只是一律回帳戶 */ } };
 const awayLong = () => { try { return !(Date.now() - Number(localStorage.getItem(awayKey)) < AWAY_MS); } catch (_){ return true; } };
 function initialTab(){ return (!awayLong() && tabFromHash()) || "accounts"; }
+/** 分析頁上方的兩個分頁鈕（📈 總覽／📅 區間分析）；只在分析頁出現 */
+function buildAnaTabs(){
+  const box = $("anaTabs");
+  box.hidden = tab !== "analysis";
+  box.replaceChildren();
+  for (const [v, label] of [["overview", "📈 總覽"], ["range", "📅 區間分析"]]){
+    const b = el("button", "chip" + (ui.ana === v ? " active" : ""), label);
+    b.setAttribute("aria-pressed", String(ui.ana === v));
+    b.addEventListener("click", () => { if (ui.ana !== v){ ui.ana = v; applyTab(); window.scrollTo(0, 0); repaint(); } });
+    box.appendChild(b);
+  }
+}
 /** 依目前分頁顯示對應區塊與期間列、標出分頁列上的目前項 */
 function applyTab(){
   $("accountsView").hidden = tab !== "accounts";
   $("detailView").hidden = tab !== "detail";
   $("sections").hidden = tab !== "analysis";
   $("meView").hidden = tab !== "me";
-  $("periodBox").hidden = tab === "accounts" || tab === "me";
+  // 分析頁的「總覽」不看期間（收支比較跨月、旅遊跨期、定期看本月／上月），期間列只在「區間分析」出現
+  $("periodBox").hidden = tab === "accounts" || tab === "me" || (tab === "analysis" && ui.ana === "overview");
+  buildAnaTabs();
   $("chips").hidden = tab === "me";   // 我的頁是全家共用的設定，不分成員（同 App）
   for (const b of $("tabbar").children) b.setAttribute("aria-current", b.dataset.tab === tab ? "page" : "false");
 }
@@ -1398,6 +1578,7 @@ async function doRefresh(){
       // 先取標記再抓資料：抓的途中有新資料進來，標記就會不同，下一分鐘自然再抓一次（反過來會把沒抓到的標成看過）
       const mark = DEMO ? null : await dataMark();
       tripDirty = true;                 // 行程跟著重抓（開著才會真的載入；重抓中保留舊畫面）
+      bulkDirty = true;                 // 總覽的收支比較／定期同理
       detailStale(); accountsStale(); meStale();   // 明細的逾期通知、帳戶頁的快照、我的頁的設定同理：開著那頁才重抓
       if (!DEMO){ await loadStatic(); periodCache.clear(); amortJob = null; }
       buildChips();
@@ -1584,7 +1765,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=9faa3d1c76";
+    d.src = "demo.js?v=1e25c18ca8";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);

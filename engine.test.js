@@ -872,5 +872,17 @@ test("銀行備註白話版：去掉純帳號段、留通知註記、過長截�
   eq(E.bankNoteText("長".repeat(70)).length, 61);
 });
 
+test("收支比較：逐月數列＝每月各自 analyze；逐年合計含月數", () => {
+  const base = { members: [], accounts: [], catRules: [], labels: [], excludeRules: [], filterRules: [], cats: [], subIgnores: new Set() };
+  const bulk = { txs: [tx("a", 100, "2026-01-05", "expense", "全聯"), tx("b", 200, "2026-02-05", "expense", "全聯"),
+                       tx("c", 999, "2026-02-06", "expense", "全聯", "email", { dedup_status: "merged" }),
+                       tx("d", 300, "2025-12-31", "expense", "全聯")], acct: [] };
+  const ser = E.monthlySeries(base, bulk, { y: 2025, m: 12 }, { y: 2026, m: 2 }, null, [], "2026-02-20");
+  eq(ser.map(x => [x.y, x.m, x.te]), [[2025, 12, 300], [2026, 1, 100], [2026, 2, 200]], "merged 不算、跨年照月份切");
+  const p = E.Period.month(2026, 2);
+  eq(ser[2].te, E.analyze({ ...base, ...E.periodFromBulk(bulk, p, [], []) }, p, null, "2026-02-20").te, "與區間分析單月一致");
+  eq(E.yearlyTotals(ser).map(a => [a.y, a.te, a.from, a.to, a.months]), [[2025, 300, 12, 12, 1], [2026, 300, 1, 2, 2]]);
+});
+
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);
