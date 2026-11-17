@@ -864,5 +864,13 @@ test("amortizePeriod＋analyze：本期支出、前期、近 6 月趨勢都用�
   ok(E.amortizePeriod(plain, p, [], []) === plain, "沒有任何攤提就原樣回傳");
 });
 
+test("銀行備註白話版：去掉純帳號段、留通知註記、過長截斷", () => {
+  eq(E.bankNoteText("8120028881003188293｜轉入 某銀行；給對方 某netflix"), "轉入 某銀行；給對方 某netflix");
+  eq(E.bankNoteText("台新國際商業銀行"), "台新國際商業銀行");
+  eq(E.bankNoteText("807-00998-190-00XXX62-X"), "");
+  eq(E.bankNoteText(null), "");
+  eq(E.bankNoteText("長".repeat(70)).length, 61);
+});
+
 console.log(`\n${pass} 通過、${fail} 失敗`);
 process.exit(fail ? 1 : 0);

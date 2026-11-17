@@ -421,6 +421,11 @@ function acctFixRuleRow(a, acc, fixed, before, after){
 
 const CARD_FEE_KW = ["卡費", "信用卡", "繳卡"];
 const isCardFeeText = a => CARD_FEE_KW.some(k => (s(a.description) + s(a.note)).includes(k));
+/** 存款流水備註的白話版（畫面用）：去掉純帳號段，留銀行名、通知補的「轉入／給對方」等；沒東西可看＝"" */
+function bankNoteText(note, max = 60){
+  const t = s(note).split("｜").map(x => x.trim()).filter(x => x && !/^[\d\-*xX ]{6,}$/.test(x)).join(" · ");
+  return t.length > max ? t.slice(0, max) + "…" : t;
+}
 /** 用途的白話標籤：「🏡 房貸信貸·固定」或「不計（轉帳）」。bucket＝那一筆的判定（fixedInfo().bucket），不給就不加尾巴 */
 const useLabel = (use, labels, bucket = null) => (use === "skip" ? "不計（轉帳）"
   : `${labelOf(use, labels)}${bucket ? "·" + { fixed: "固定", free: "消費", invest: "投資" }[bucket] : ""}`);
@@ -1085,7 +1090,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   assetGroup, forMember, portfolio, ASSET_GROUPS,
   normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
   amortInfo, amortSlices, amortize, amortizePeriod, amortLabel, amortAction, amortMonth, parseAmort, AMORT_MAX,
-  INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, acctSpends, acctUseOf, acctRuleKey, acctRuleSource, useRuleRow, financeRatios, missingBuiltins,
+  INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, bankNoteText, acctSpends, acctUseOf, acctRuleKey, acctRuleSource, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };
 if (typeof module !== "undefined") module.exports = api;
 else root.Engine = api;

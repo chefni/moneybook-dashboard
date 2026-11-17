@@ -292,6 +292,7 @@ function purposeDialog(a, acc){
   pick.addEventListener("change", check);
   fixedChk.addEventListener("change", () => { touched = true; refresh(); });
   add(f.body, el("b", null, a.description || "（無摘要）"), el("p", "muted", `${a.occurred_at} · ${E.ntD(Math.abs(a.amount))} · ${E.accountDisplay(acc, S.members)}`),
+      E.bankNoteText(a.note, 200) ? el("p", "note", "📝 銀行備註：" + E.bankNoteText(a.note, 200)) : null,
     field("這筆算成", pick), remember, natSec,
     el("p", "note", "「不計」＝不算消費（例如繳卡費、自己帳戶間搬錢、轉去證券戶買股——股票由證券對帳單記成投資）；" +
       "選分類＝算成那一類的支出。"));

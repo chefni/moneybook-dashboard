@@ -43,9 +43,9 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=aa5e70b1cb"></script>
-<script defer src="detail.js?v=49b82c467d"></script>
-<script defer src="accounts.js?v=acd02d3ee1"></script>
+<script defer src="engine.js?v=57bcb5a098"></script>
+<script defer src="detail.js?v=d661c4e857"></script>
+<script defer src="accounts.js?v=c63bff279a"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
   :root {
@@ -226,6 +226,7 @@
   .li .m { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
   .li .m > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .li small { color:var(--sub); font-size:12px; }
+  .li small.bnote { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .li .a { white-space:nowrap; text-align:right; display:flex; flex-direction:column; align-items:flex-end; }
   .li.off .m > span:first-child { text-decoration:line-through; color:var(--sub); }
   .li .dim, .li.off .a { color:var(--sub); }

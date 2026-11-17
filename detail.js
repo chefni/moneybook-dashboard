@@ -198,13 +198,19 @@ function subLine(r, text){
   sm.appendChild(document.createTextNode(text + (a ? ` · 原 ${nt(a.total)}（${a.src.occurred_at.slice(0, 7)} 付）` : "")));
   return sm;
 }
+/** 存款轉出的銀行備註一行（如「轉入 某銀行 · 給對方 倪netflix」）：看得出為什麼算成這一類；沒備註＝null */
+function noteLine(note){
+  const t = E.bankNoteText(note);
+  return t ? el("small", "bnote", "📝 " + t) : null;
+}
 /** 支出單列（App ExpenseTxRow）：未計灰字刪除線＋白話原因；疑似重複可就地確認 */
 function expenseRow(r){
   const { t, ex, why, suspect } = r;
   const box = el("div", "li" + (ex ? " off" : ""));
   const main = el("button", "main");
   add(main, add(el("span", "m"), el("span", null, (suspect ? "⚠️ " : "") + title(t)),
-                subLine(r, `${t.occurred_at} · ${E.statSource(t)}` + (t.fromAcct ? "（存款轉出）" : "") + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : ""))),
+                subLine(r, `${t.occurred_at} · ${E.statSource(t)}` + (t.fromAcct ? "（存款轉出）" : "") + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : "")),
+                t.fromAcct ? noteLine(t.note) : null),
       el("span", "a" + (ex || suspect ? " dim" : t.kind === "expense" ? " expense" : " income"), (t.kind === "expense" ? "−" : "＋") + nt(t.amount)));
   // 存款轉出算成的支出沒有交易表那一列可編輯：點開改它的「用途」
   main.addEventListener("click", () => (t.fromAcct ? purposeDialog(t.raw, S.accounts.find(a => a.id === t.raw.account_id)) : editTx(t, r)));
@@ -266,7 +272,7 @@ function drawBank(b, v){
     else if (use === "skip") sub.appendChild(el("span", "tag", E.useLabel(use, S.labels)));
     if (pending) sub.appendChild(el("span", "tag warn", "待分用途"));
     sub.appendChild(document.createTextNode(`${a.occurred_at} · ${account}`));
-    add(row, add(el("span", "m"), el("span", null, a.description || "（無摘要）"), sub),
+    add(row, add(el("span", "m"), el("span", null, a.description || "（無摘要）"), sub, noteLine(a.note)),
         add(el("span", "a"), el("span", ex ? "dim" : a.amount < 0 ? "expense" : "income", (a.amount < 0 ? "−" : "＋") + nt(Math.abs(a.amount))),
             a.balance != null ? el("small", null, "餘 " + Math.round(a.balance).toLocaleString("en-US")) : null));
     row.addEventListener("click", () => (use != null || pending
