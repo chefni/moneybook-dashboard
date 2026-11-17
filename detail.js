@@ -127,14 +127,19 @@ function agedDialog(){
 }
 
 /* ═══════════ 四個檢視 ═══════════ */
-/** 可展開的分組標題列（依分類／收入分類共用）；key 以檢視區分，避免支出與收入同名分類一起開合 */
-function groupHead(key, label, g, amountCls){
+/** 可展開的分組標題列（依分類／收入分類共用）；key 以檢視區分，避免支出與收入同名分類一起開合。
+ *  mark（支出才有）＝{ color, pct }：前面放圓餅同色的色塊、金額下放占比；不在圓餅裡的分類 color 為 null，留空位讓字對齊 */
+function groupHead(key, label, g, amountCls, mark){
   const open = DV.open.has(key);
   const h = el("button", "ghead");
   h.setAttribute("aria-expanded", String(open));
+  let sw = null;
+  if (mark){ sw = el("i", "sw"); if (mark.color) sw.style.background = mark.color; }
+  const amt = el("span", "a " + (amountCls || ""), nt(g.total));
+  if (mark && mark.pct != null) amt.appendChild(el("small", null, mark.pct + "%"));
   add(h, el("span", "m", `${open ? "▾" : "▸"} ${label}（${g.rows.length} 筆${g.off ? `，${g.off} 未計` : ""}）` +
-                          (g.suspect ? `  ⚠️${g.suspect}` : "")),
-      el("span", "a " + (amountCls || ""), nt(g.total)));
+                          (g.suspect ? `  ⚠️${g.suspect}` : "")), amt);
+  if (sw) h.insertBefore(sw, h.firstChild);
   h.addEventListener("click", () => { open ? DV.open.delete(key) : DV.open.add(key); drawBody(); });
   return h;
 }
@@ -154,39 +159,29 @@ function drawExpense(b, v){
   b.appendChild(mode);
   if (DV.flat){ for (const r of v.expRows) b.appendChild(expenseRow(r)); return; }
   catChart(b, v);
+  const marks = catMarks(v.byCat);
   for (const g of v.groups){
     const key = "exp:" + g.key;
-    b.appendChild(groupHead(key, E.labelOf(g.key, S.labels), g));
+    b.appendChild(groupHead(key, E.labelOf(g.key, S.labels), g, "", marks.get(g.key) || { color: null, pct: null }));
     if (DV.open.has(key)) for (const r of g.rows) b.appendChild(expenseRow(r));
   }
 }
 
-/** 「依分類」上方的圖表（原本分析頁的「圖表與分類」併進來）：圓餅／長條／近 6 月／收起。
- *  圖下面就是分類清單本身（點分類展開逐筆），不再另列一份分類長條 */
+/** 「依分類」上方的圓餅圖（原本分析頁的「圖表與分類」併進來；2026-11-18 醫師要求只留圓餅）。
+ *  不另列圖例：每個分類的色塊與占比直接放在下面的分類標題列（catMarks），圖與清單一眼對得上 */
 function catChart(b, v){
-  const tabs = el("div", "chips");
-  tabs.setAttribute("role", "group");
-  tabs.setAttribute("aria-label", "圖表");
-  ["圓餅", "長條", "近6月", "收起圖表"].forEach((n, i) => {
-    const c = el("button", "chip" + (ui.chart === i ? " active" : ""), n);
-    c.setAttribute("aria-pressed", String(ui.chart === i));
-    c.addEventListener("click", () => { ui.chart = i; drawBody(); });
-    tabs.appendChild(c);
-  });
-  b.appendChild(tabs);
-  if (ui.chart === 3 || !v.byCat.length) return;
+  if (!v.byCat.length) return;
   if (!window.Chart){ b.appendChild(el("p", "warn", "圖表程式庫沒載入（可能網路不穩），下方數字不受影響。")); return; }
   const cv = el("canvas");
   cv.setAttribute("role", "img");
-  cv.setAttribute("aria-label", "支出圖表（數值見下方分類清單）");
-  const box = el("div", "cwrap");
-  // 橫條圖的高度跟著分類數長（固定比例的話分類一多就擠成一團）
-  if (ui.chart === 1) box.style.height = Math.max(160, v.byCat.length * 26 + 30) + "px";
-  add(b, add(box, cv));
-  // 近 6 月要跨月資料：跟分析頁同一個算法（含存款轉出算成的支出），只在選它時才算
-  const trend = ui.chart === 2 ? E.analyze({ ...S, ...DV.d }, DV.p, sel).trend6 : [];
-  requestAnimationFrame(() => drawChart(cv, v.byCat, trend));
-  if (ui.chart === 2) b.appendChild(el("p", "note", "近 6 個月支出"));
+  cv.setAttribute("aria-label", "支出圓餅圖（各分類金額與占比見下方清單）");
+  add(b, add(el("div", "cwrap"), cv));
+  requestAnimationFrame(() => drawChart(cv, v.byCat));
+}
+/** 分類 key → { color: 圓餅上的顏色, pct: 占比 }（顏色依 byCat 的順序取，跟 drawChart 同一套）；全部未計的分類不在圓餅裡 */
+function catMarks(byCat){
+  const tot = byCat.reduce((a, c) => a + c[1], 0);
+  return new Map(byCat.map(([k, amt], i) => [k, { color: pieColor(i), pct: tot > 0 ? Math.round(amt * 100 / tot) : 0 }]));
 }
 
 /** 列的小字行；固定支出的列前面加「固定」小標籤（消費不加，免得滿版標籤） */

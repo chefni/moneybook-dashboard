@@ -44,7 +44,7 @@
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
 <script defer src="engine.js?v=57bcb5a098"></script>
-<script defer src="detail.js?v=d661c4e857"></script>
+<script defer src="detail.js?v=b78b3568ad"></script>
 <script defer src="accounts.js?v=c63bff279a"></script>
 <script defer src="me.js?v=144230b155"></script>
 <style>
@@ -220,6 +220,7 @@
   .ghead .m { flex:1; min-width:0; }
   .ghead .a { text-align:right; display:flex; flex-direction:column; align-items:flex-end; }
   .ghead small { font-weight:400; font-size:12px; }
+  .ghead .sw { flex:none; width:12px; height:12px; border-radius:3px; }   /* 圓餅同色的色塊（沒在圓餅裡的留空位對齊） */
   .li { border-bottom:1px dashed var(--line); }
   .li > .main { display:flex; width:100%; align-items:center; gap:10px; text-align:left; border:none; border-radius:0;
                 background:none; padding:8px 2px; min-height:48px; font-size:14px; }
@@ -399,7 +400,7 @@ const S = {                  // 不隨期間變的設定類資料
 };
 const periodCache = new Map();   // 期間 key → Promise<{ txsAll（本期非 merged）, txs（其中 unique）, prevTxs, range6, acctTxnsWide }>
 const openSec = new Map();       // 各區開合狀態（換期間不會被洗回收合，同 App v93）
-const ui = { chart: 0, cardSrc: null, bars: new Set() };
+const ui = { cardSrc: null, bars: new Set() };
 let charts = [];
 
 /* ═══════════ 畫面切換 ═══════════ */
@@ -1243,26 +1244,18 @@ let Store = LiveStore;
 
 const PIE_COLORS = ["#0abde3", "#feca57", "#5f27cd", "#ff9f43", "#54a0ff", "#01a3a4", "#f368e0",
                     "#576574", "#3ae374", "#ee5253", "#10ac84", "#8395a7", "#e77f67", "#786fa6"];
-function drawChart(cv, byCat, trend6){
+const pieColor = i => PIE_COLORS[i % PIE_COLORS.length];
+/** 明細「依分類」的支出圓餅。不畫圖例：色塊與占比在下面各分類標題列（detail.js catMarks，顏色同用 pieColor） */
+function drawChart(cv, byCat){
   if (!window.Chart || !cv.isConnected) return;
-  const ink = css("--ink"), sub = css("--sub"), L = k => E.labelOf(k, S.labels);
-  const nf = v => nt(v);
-  if (ui.chart === 0){
-    // 圖例帶百分比（同 App 圓餅：四捨五入；長條那邊是截斷，與 App 各自一致）
-    const tot = byCat.reduce((a, c) => a + c[1], 0);
-    charts.push(new Chart(cv, { type: "doughnut",
-      data: { labels: byCat.map(c => `${L(c[0])} ${tot > 0 ? Math.round(c[1] * 100 / tot) : 0}%`),
-              datasets: [{ data: byCat.map(c => c[1]), backgroundColor: byCat.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]), borderWidth: 0 }] },
-      options: { animation: false, plugins: { legend: { position: "bottom", labels: { color: ink, boxWidth: 12 } },
-                            tooltip: { callbacks: { label: c => `${c.label} ${nf(c.raw)}` } } } } }));
-  } else {
-    const data = ui.chart === 1 ? byCat.map(c => [L(c[0]), c[1]]) : trend6;
-    charts.push(new Chart(cv, { type: "bar",
-      data: { labels: data.map(x => x[0]), datasets: [{ data: data.map(x => x[1]), backgroundColor: "#0abde3", borderRadius: 4 }] },
-      options: { animation: false, indexAxis: ui.chart === 1 ? "y" : "x", maintainAspectRatio: ui.chart !== 1, plugins: { legend: { display: false },
-                   tooltip: { callbacks: { label: c => nf(c.raw) } } },
-                 scales: { x: { ticks: { color: sub } }, y: { ticks: { color: sub } } } } }));
-  }
+  const L = k => E.labelOf(k, S.labels);
+  const tot = byCat.reduce((a, c) => a + c[1], 0);
+  const pct = v => (tot > 0 ? Math.round(v * 100 / tot) : 0) + "%";   // 四捨五入，同 App 圓餅
+  charts.push(new Chart(cv, { type: "doughnut",
+    data: { labels: byCat.map(c => L(c[0])),
+            datasets: [{ data: byCat.map(c => c[1]), backgroundColor: byCat.map((_, i) => pieColor(i)), borderWidth: 0 }] },
+    options: { animation: false, plugins: { legend: { display: false },
+                          tooltip: { callbacks: { label: c => `${c.label} ${nt(c.raw)}（${pct(c.raw)}）` } } } } }));
 }
 
 async function ignoreSub(merchant){
@@ -1326,8 +1319,14 @@ function thisMonth(){ const d = new Date(); return E.Period.month(d.getFullYear(
 // 切分頁用 replaceState：返回鍵不在分頁之間來回跳（同手機 App 的底部分頁），只有「帳戶明細」這種下一層才 pushState。
 const TABS = ["accounts", "detail", "analysis", "me"];
 const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : null);
-/** 打開家計簿一律先到「帳戶」（使用者要求，2026-11-14）；重新整理時網址還帶著 #分頁，就留在原頁 */
-function initialTab(){ return tabFromHash() || "accounts"; }
+/** 打開家計簿一律先到「帳戶」（使用者要求，2026-11-14；11-18 再提）。
+ *  手機 App 被系統收掉後再點開，會用上次的網址（還帶著 #明細）重新載入——所以不能只看網址：
+ *  離開不到 AWAY_MS（＝剛按重新整理、或切出去一下就回來）才留在原頁，否則一律回帳戶。 */
+const AWAY_MS = 2 * 60_000;
+const awayKey = "mb_hiddenAt";
+const markHidden = () => { try { localStorage.setItem(awayKey, String(Date.now())); } catch (_){ /* 私密模式：照樣能用，只是一律回帳戶 */ } };
+const awayLong = () => { try { return !(Date.now() - Number(localStorage.getItem(awayKey)) < AWAY_MS); } catch (_){ return true; } };
+function initialTab(){ return (!awayLong() && tabFromHash()) || "accounts"; }
 /** 依目前分頁顯示對應區塊與期間列、標出分頁列上的目前項 */
 function applyTab(){
   $("accountsView").hidden = tab !== "accounts";
@@ -1569,6 +1568,12 @@ function boot(){
   if (!E){ showError("無法載入計算模組（engine.js），請重新整理。"); return; }
   period = thisMonth();
   tab = initialTab();
+  window.addEventListener("pagehide", markHidden);   // 按重新整理也記一下時間：馬上載回來時留在原頁
+  // App 在背景放久了再點開＝「打開家計簿」：回到帳戶頁（同 initialTab 的門檻；還沒登入完就不動）
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden){ markHidden(); return; }
+    if (awayLong() && tab !== "accounts" && !$("app").hidden) setTab("accounts");
+  });
   // 網址帶上分頁；history.state 原樣保留（重新整理時若停在帳戶明細，會回到同一個帳戶）。
   // ⚠️ Google 登入回跳時 hash 裡是 access_token：那時絕不能動，Supabase 要從那裡取登入狀態
   if (!location.hash || tabFromHash()) history.replaceState(history.state, "", location.pathname + location.search + "#" + tab);
