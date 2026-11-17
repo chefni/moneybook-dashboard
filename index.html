@@ -328,12 +328,11 @@
 
 <div id="app" hidden>
   <header>
-    <!-- 頂端只放「這一頁用得到」的鈕（2026-11-18 醫師要求）：立即同步＝帳戶頁、對帳簿＝明細頁、登出＝我的頁（applyHeader） -->
+    <!-- 頂端只放「這一頁用得到」的鈕（2026-11-18 醫師要求）：立即同步＝帳戶頁、對帳簿＝明細頁（applyHeader）；登出在我的頁最下方「關於」區（me.js） -->
     <span class="spacer"></span>
     <span id="demoBadge" class="badge" hidden>示範模式（合成資料）</span>
     <button id="btnSync" hidden>🔄 立即同步</button>
     <a id="billLink" href="./billbook.html" style="color:var(--accent-ink);font-size:14px" hidden>📑 對帳簿</a>
-    <button id="btnSignOut" hidden>登出</button>
   </header>
   <p class="muted" id="syncMsg" role="status" aria-live="polite"></p>
   <p class="warn" id="netMsg" role="alert" hidden></p>
@@ -1495,12 +1494,11 @@ const markHidden = () => { try { localStorage.setItem(awayKey, String(Date.now()
 const awayLong = () => { try { return !(Date.now() - Number(localStorage.getItem(awayKey)) < AWAY_MS); } catch (_){ return true; } };
 function initialTab(){ return (!awayLong() && tabFromHash()) || "accounts"; }
 /** 頂端列：各鈕只在用得到的分頁出現；整列都沒東西（例如分析頁）就收起來，不留空白 */
-let syncOn = false, signedIn = false;   // 立即同步（非示範、登入完成才有）／已登入
+let syncOn = false;   // 立即同步只在非示範、登入完成後才有
 function applyHeader(){
   $("btnSync").hidden = !(syncOn && tab === "accounts");
   $("syncMsg").hidden = tab !== "accounts";            // 「上次同步 …／同步中…」跟著立即同步鈕
   $("billLink").hidden = tab !== "detail";
-  $("btnSignOut").hidden = !(signedIn && tab === "me");
   const head = document.querySelector("#app > header");
   head.hidden = [...head.children].every(c => c.hidden || c.classList.contains("spacer"));
 }
@@ -1705,7 +1703,6 @@ async function afterLogin(session){
   try {
     $("who").textContent = "登入：" + (session.user.email || "");
     uid = session.user.id;
-    signedIn = true; applyHeader();
     showStatus("確認家庭成員資格中…");
     const { data: hm, error } = await sb.from("household_members").select("household_id")
       .eq("user_id", session.user.id).order("joined_at").limit(1);
@@ -1734,7 +1731,6 @@ function startLive(){
     if (error) $("loginErr").textContent = error.message;
   });
   const doSignOut = async () => { await sb.auth.signOut(); location.reload(); };
-  $("btnSignOut").addEventListener("click", doSignOut);
   $("btnSignOut2").addEventListener("click", doSignOut);
   // 登入失敗（例如帳號不在 Google 測試名單）會帶著 error_description 回跳：講出來，不然看起來像按鈕壞了
   const back = new URLSearchParams(location.search + "&" + location.hash.replace(/^#/, ""));
