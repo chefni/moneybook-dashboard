@@ -328,11 +328,11 @@
 
 <div id="app" hidden>
   <header>
-    <h1>🏠 家計簿</h1>
+    <!-- 頂端只放「這一頁用得到」的鈕（2026-11-18 醫師要求）：立即同步＝帳戶頁、對帳簿＝明細頁、登出＝我的頁（applyHeader） -->
     <span class="spacer"></span>
     <span id="demoBadge" class="badge" hidden>示範模式（合成資料）</span>
     <button id="btnSync" hidden>🔄 立即同步</button>
-    <a href="./billbook.html" style="color:var(--accent-ink);font-size:14px">📑 對帳簿</a>
+    <a id="billLink" href="./billbook.html" style="color:var(--accent-ink);font-size:14px" hidden>📑 對帳簿</a>
     <button id="btnSignOut" hidden>登出</button>
   </header>
   <p class="muted" id="syncMsg" role="status" aria-live="polite"></p>
@@ -1494,6 +1494,16 @@ const awayKey = "mb_hiddenAt";
 const markHidden = () => { try { localStorage.setItem(awayKey, String(Date.now())); } catch (_){ /* 私密模式：照樣能用，只是一律回帳戶 */ } };
 const awayLong = () => { try { return !(Date.now() - Number(localStorage.getItem(awayKey)) < AWAY_MS); } catch (_){ return true; } };
 function initialTab(){ return (!awayLong() && tabFromHash()) || "accounts"; }
+/** 頂端列：各鈕只在用得到的分頁出現；整列都沒東西（例如分析頁）就收起來，不留空白 */
+let syncOn = false, signedIn = false;   // 立即同步（非示範、登入完成才有）／已登入
+function applyHeader(){
+  $("btnSync").hidden = !(syncOn && tab === "accounts");
+  $("syncMsg").hidden = tab !== "accounts";            // 「上次同步 …／同步中…」跟著立即同步鈕
+  $("billLink").hidden = tab !== "detail";
+  $("btnSignOut").hidden = !(signedIn && tab === "me");
+  const head = document.querySelector("#app > header");
+  head.hidden = [...head.children].every(c => c.hidden || c.classList.contains("spacer"));
+}
 /** 分析頁上方的兩個分頁鈕（📈 總覽／📅 區間分析）；只在分析頁出現 */
 function buildAnaTabs(){
   const box = $("anaTabs");
@@ -1515,6 +1525,7 @@ function applyTab(){
   // 分析頁的「總覽」不看期間（收支比較跨月、旅遊跨期、定期看本月／上月），期間列只在「區間分析」出現
   $("periodBox").hidden = tab === "accounts" || tab === "me" || (tab === "analysis" && ui.ana === "overview");
   buildAnaTabs();
+  applyHeader();
   $("chips").hidden = tab === "me";   // 我的頁是全家共用的設定，不分成員（同 App）
   for (const b of $("tabbar").children) b.setAttribute("aria-current", b.dataset.tab === tab ? "page" : "false");
 }
@@ -1678,7 +1689,7 @@ async function startSync(){
   watchSync(data.id);
 }
 async function initSync(){
-  $("btnSync").hidden = false;
+  syncOn = true; applyHeader();
   $("btnSync").addEventListener("click", startSync);
   // 別的裝置（或 App）按了同步還沒跑完 → 接著等，完成時一樣自動更新
   const since = new Date(Date.now() - 30 * 60_000).toISOString();
@@ -1694,7 +1705,7 @@ async function afterLogin(session){
   try {
     $("who").textContent = "登入：" + (session.user.email || "");
     uid = session.user.id;
-    $("btnSignOut").hidden = false;
+    signedIn = true; applyHeader();
     showStatus("確認家庭成員資格中…");
     const { data: hm, error } = await sb.from("household_members").select("household_id")
       .eq("user_id", session.user.id).order("joined_at").limit(1);
@@ -1766,7 +1777,7 @@ function boot(){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
     d.src = "demo.js?v=1e25c18ca8";
-    d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; buildChips(); render(); };
+    d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; applyHeader(); buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);
     return;
