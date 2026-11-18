@@ -65,7 +65,7 @@
 <body>
 
 <header>
-  <h1>📑 對帳簿</h1>
+  <h1>對帳簿</h1>
   <a class="back" href="./index.html">← 家庭儀表板</a>
   <span class="muted" id="whoami"></span>
   <span class="grow"></span>
@@ -193,7 +193,7 @@ function statusNode(r){
   if (r.kind === "ok") return el("span", "ok", "✓ 相符");
   if (r.kind === "bad")
     return el("span", "bad", r.diff != null
-      ? `⚠ 逐筆比帳單${r.diff > 0 ? "多" : "少"} ${fmt(Math.abs(r.diff))}` : "⚠ 有帳號對不上");
+      ? `逐筆比帳單${r.diff > 0 ? "多" : "少"} ${fmt(Math.abs(r.diff))}` : "有帳號對不上");
   return el("span", "muted", r.text || "—");
 }
 
@@ -284,8 +284,8 @@ function openDetail(sid){
   if (s.payments != null) bits.push("已繳 " + fmt(s.payments));
   if (r.kind === "ok") bits.push("✓ 逐筆與帳單相符");
   else if (r.kind === "bad" && r.diff != null)
-    bits.push(`⚠ 逐筆 ${fmt(r.sum)} vs ${r.basis} ${fmt(r.base)}，差 ${fmt(r.diff)}`);
-  else if (r.kind === "bad") bits.push("⚠ 有帳號的期初＋收支對不上期末");
+    bits.push(`逐筆 ${fmt(r.sum)} vs ${r.basis} ${fmt(r.base)}，差 ${fmt(r.diff)}`);
+  else if (r.kind === "bad") bits.push("有帳號的期初＋收支對不上期末");
   if (r.accounts) for (const a of r.accounts)
     bits.push(`${a.acct || "帳號"}：期初 ${fmt(a.open)} → 期末 ${fmt(a.close)}${a.diff ? "（差 " + fmt(a.diff) + "）" : ""}`);
   bits.push("來源 " + (s.source === "ai" ? "AI 解析" : s.source === "generic" ? "通用解析" : "專屬解析器"));

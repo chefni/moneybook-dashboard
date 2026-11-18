@@ -196,21 +196,21 @@ function paintMe(){
   const ing = MV.data.ingest, src = MV.data.sources, ai = MV.data.ai, mail = MV.data.mail;
   const pend = src ? E.splitSources(src, isHidden).discovered.length : 0;
   add(root, houseCard(), syncCard(),
-    el("h3", "vh", "🧾 記帳規則"),
-    fold("me:labels", "🏷️ 消費分類與預算", `${S.labels.length} 類` +
+    el("h3", "vh", "記帳規則"),
+    fold("me:labels", "消費分類與預算", `${S.labels.length} 類` +
       (S.labels.some(l => l.budget > 0) ? `，${S.labels.filter(l => l.budget > 0).length} 類有設預算` : "，都沒設預算"), labelsBody),
-    fold("me:rules", "🧠 已學習的規則",
+    fold("me:rules", "已學習的規則",
       `分類規則 ${S.catRules.length}・排除規則 ${S.excludeRules.length}・非訂閱 ${S.subIgnores.size}`, rulesBody),
-    fold("me:filters", "🎛 篩選器（自動規則）", S.filterRules.length
+    fold("me:filters", "篩選器（自動規則）", S.filterRules.length
       ? `${S.filterRules.length} 條（${S.filterRules.filter(r => r.active !== false).length} 條啟用中）` : "尚無篩選器", filtersBody),
-    el("h3", "vh", "⚙️ 進階設定"),
-    fold("me:mail", "📧 信箱連結", !loaded("mail") ? "設定要從哪個信箱撈帳單"
-      : mail ? `✅ 已連結 ${mail.gmail}` : "你還沒連結信箱", mailBody),
-    fold("me:sources", "📥 帳單來源", !src ? "哪個信箱撈哪家帳單"
-      : `${src.filter(x => x.active).length} 個來源` + (pend ? `・📬 發現 ${pend} 個尚未設定的機構` : ""), sourcesBody),
-    fold("me:ingest", "🕒 自動撈取", !loaded("ingest") ? "多久自動撈一次信箱" : ingestSummary(ing), ingestBody),
-    fold("me:bills", "💳 繳費提醒", activeReminders().length ? `${activeReminders().length} 個提醒` : "帳單繳款日提醒", billsBody),
-    fold("me:ai", "🤖 AI 金鑰", !ai ? "智能分類與 AI 帳單解析"
+    el("h3", "vh", "進階設定"),
+    fold("me:mail", "信箱連結", !loaded("mail") ? "設定要從哪個信箱撈帳單"
+      : mail ? `已連結 ${mail.gmail}` : "你還沒連結信箱", mailBody),
+    fold("me:sources", "帳單來源", !src ? "哪個信箱撈哪家帳單"
+      : `${src.filter(x => x.active).length} 個來源` + (pend ? `・發現 ${pend} 個尚未設定的機構` : ""), sourcesBody),
+    fold("me:ingest", "自動撈取", !loaded("ingest") ? "多久自動撈一次信箱" : ingestSummary(ing), ingestBody),
+    fold("me:bills", "繳費提醒", activeReminders().length ? `${activeReminders().length} 個提醒` : "帳單繳款日提醒", billsBody),
+    fold("me:ai", "AI 金鑰", !ai ? "智能分類與 AI 帳單解析"
       : `${ai.enabled ? "已啟用" : "未啟用"}・${ai.hasKey ? "已設定金鑰" : "尚未設定金鑰"}`, aiBody),
     aboutCard());
 }
@@ -220,7 +220,7 @@ function houseCard(){
   const c = el("section", "card");
   need(c, "household", h => {
     if (!h){ c.appendChild(el("p", "warn", "讀不到家庭資料（可能已被移出這個家庭），請重新整理")); return; }
-    add(c, el("h2", null, "🏠 " + (h.name || "我的家")), inviteRow(h));
+    add(c, el("h2", null, "" + (h.name || "我的家")), inviteRow(h));
   });
   c.appendChild(el("div", "hr"));
   membersPart(c);
@@ -229,12 +229,12 @@ function houseCard(){
 function inviteRow(h){
   const box = el("div");
   const code = el("span", "code", h.invite_code || "—");
-  const copy = btn("📋 複製", async () => {
+  const copy = btn("複製", async () => {
     try { await navigator.clipboard.writeText(h.invite_code); toast("已複製邀請碼"); }
     catch (_){ toast("這個瀏覽器不讓網頁複製，請長按邀請碼自己複製"); }
   });
   // 手機才有「分享到 LINE…」的系統選單；電腦瀏覽器多半沒有，就不放這顆
-  const share = navigator.share ? btn("📤 分享", () => navigator.share({ title: "家計簿邀請",
+  const share = navigator.share ? btn("分享", () => navigator.share({ title: "家計簿邀請",
     text: `加入我們的家計簿：用 Google 登入 ${location.origin + location.pathname} 後，輸入邀請碼 ${h.invite_code}` })
     .catch(() => { /* 使用者自己取消分享：不用講 */ })) : null;
   const rotate = btn("換一組", () => rotateDialog(h), "link", "更換邀請碼，舊的邀請碼會立刻失效");
@@ -248,23 +248,23 @@ function rotateDialog(h){
   confirmWrite("要換一組邀請碼嗎？", [`換了以後，舊的邀請碼「${h.invite_code}」立刻失效。`,
     "已經加入的家人不受影響，還沒加入的人要用新的碼。"], "換一組",
   async () => { fresh = await Store.rotateInvite(); },
-  () => { MV.data.household = { ...h, invite_code: fresh }; toast("✅ 已換成新的邀請碼，舊的已失效"); repaint(); });
+  () => { MV.data.household = { ...h, invite_code: fresh }; toast("已換成新的邀請碼，舊的已失效"); repaint(); });
 }
 
 function membersPart(c){
-  add(c, el("h3", null, "👪 家庭成員"),
+  add(c, el("h3", null, "家庭成員"),
     el("p", "note", "名字要與對帳單上的姓名一致，匯入的交易才會自動歸給他。暱稱是畫面顯示用的短稱，沒填就用名字。"));
-  if (!S.members.length) c.appendChild(el("p", "muted", "名冊還是空的：按下方「➕ 新增成員」加第一位。"));
+  if (!S.members.length) c.appendChild(el("p", "muted", "名冊還是空的：按下方「新增成員」加第一位。"));
   for (const m of S.members){
     const mine = uid != null && m.user_id === uid;
-    const status = mine ? "👤 這是我（「＋ 記一筆」預設算我的）"
+    const status = mine ? "這是我（「＋ 記一筆」預設算我的）"
       : m.user_id ? "已連結登入帳號" : "未連結登入帳號（沒有帳號的家人也能入冊）";
     c.appendChild(setRow(m.name + (m.nickname ? `（${m.nickname}）` : ""), status,
       mine ? null : btn("這是我", () => setMeDialog(m)),
       btn("✎", () => memberDialog(m), "link", `編輯 ${m.name}`),
-      btn("🗑", () => deleteMemberDialog(m), "link danger", `刪除 ${m.name}`)));
+      btn("刪除", () => deleteMemberDialog(m), "link danger", `刪除 ${m.name}`)));
   }
-  c.appendChild(btn("➕ 新增成員", () => memberDialog(null), ""));
+  c.appendChild(btn("新增成員", () => memberDialog(null), ""));
 }
 /** 「這是我」：記一筆預設歸屬。選的人已連到別人的登入帳號時講清楚（App 會直接搶走） */
 function setMeDialog(m){
@@ -307,20 +307,20 @@ function deleteMemberDialog(m){
 
 /* ── 🔄 同步狀態（按鈕就是頁首那顆的同一個動作） ── */
 function syncCard(){
-  const c = add(el("section", "card"), el("h3", null, "🔄 同步狀態"));
+  const c = add(el("section", "card"), el("h3", null, "同步狀態"));
   need(c, "ingest", ing => {
     const last = [ing && ing.last_run_at, MV.data.lastDone].filter(Boolean).sort().pop();
     add(c, el("p", null, `上次同步：${last ? hhmm(last) : "—"}`));
     if (ing && ing.last_error){
       // 頁首只放得下最後一行的前 80 字；這裡給完整原因（App v58：壞掉時才知道是壞了，不是這幾天沒消費）
       const d = el("details", "errbox");
-      add(d, el("summary", null, `⚠️ 上次自動撈取失敗（${hhmm(ing.last_error_at) || "時間不明"}）`),
+      add(d, el("summary", null, `上次自動撈取失敗（${hhmm(ing.last_error_at) || "時間不明"}）`),
         el("p", null, "資料沒有遺失，下次同步會重撈同一段時間。點這裡看原因："), el("pre", null, String(ing.last_error)));
       c.appendChild(d);
     }
   });
   // 結果（已送出／剛同步過／已有一次在跑）由 startSync 寫在頁首，這裡不另外說「已送出」——講的可能跟頁首相反
-  const b = btn("🔄 立即同步", async () => {
+  const b = btn("立即同步", async () => {
     if (syncing) return;
     b.disabled = true;
     toast("進度與結果顯示在畫面最上方");
@@ -347,13 +347,13 @@ function labelsBody(b){
   for (const l of labels){
     b.appendChild(setRow(l.label, (l.budget > 0 ? `每月預算 ${nt(l.budget)}` : "未設預算") + (l.builtin ? "" : "・自訂"),
       btn("✎", () => labelDialog(l), "link", `編輯 ${l.label}`),
-      l.builtin ? null : btn("🗑", () => deleteLabelDialog(l), "link danger", `刪除 ${l.label}`)));
+      l.builtin ? null : btn("刪除", () => deleteLabelDialog(l), "link danger", `刪除 ${l.label}`)));
   }
   const missing = E.missingBuiltins(labels);   // 後來新增的內建分類（選單已經看得到，補進清單才能改名、設預算）
   if (missing.length)
     b.appendChild(btn(`補上新的內建分類（${missing.join("、")}）`, () => confirmWrite("補上新的內建分類？", [`會把 ${missing.join("、")} 加進分類清單。`], "補上",
       () => Store.seedLabels(missing, labels.reduce((x, y) => Math.max(x, y.sort_order ?? 0), 0) + 1).catch(e => { if (!e || e.code !== "23505") throw e; })), ""));
-  b.appendChild(btn("➕ 新增分類", () => labelDialog(null), ""));
+  b.appendChild(btn("新增分類", () => labelDialog(null), ""));
 }
 /** 新增（l＝null）或編輯分類：名稱必填；預算留空＝不設 */
 function labelDialog(l){
@@ -391,9 +391,9 @@ function rulesBody(b){
     btn("查看與刪除…", rulesDialog, ""));
 }
 function rulesDialog(){
-  const { body } = dialog("🧠 已學習的規則");
+  const { body } = dialog("已學習的規則");
   const q = el("input");
-  q.type = "search"; q.placeholder = "🔍 搜尋商家／分類";
+  q.type = "search"; q.placeholder = "搜尋商家／分類";
   q.setAttribute("aria-label", "搜尋商家或分類");
   const list = el("div");
   // 對話框裡留一份自己的清單：刪了就地拿掉，背景再重抓（重抓完的 S 不會回頭蓋掉這裡）
@@ -407,21 +407,21 @@ function rulesDialog(){
     if (!r.cat.length) list.appendChild(el("p", "muted", "（無）"));
     for (const x of r.cat.slice(0, shown))
       list.appendChild(setRow(`${x.merchant} → ${E.labelOf(x.category, S.labels)}`, x.source === "ai" ? "AI 自動" : "手動",
-        btn("🗑", () => del(`分類規則「${x.merchant}」`, () => Store.deleteCatRule(x.id), () => { cat = cat.filter(y => y !== x); }),
+        btn("刪除", () => del(`分類規則「${x.merchant}」`, () => Store.deleteCatRule(x.id), () => { cat = cat.filter(y => y !== x); }),
           "link danger", `刪除分類規則 ${x.merchant}`)));
     if (r.cat.length > shown) list.appendChild(btn(`再顯示 200 條（共 ${r.cat.length} 條）`, () => { shown += 200; draw(); }, ""));
     list.appendChild(el("h4", null, `排除規則（${r.exc.length}）`));
     if (!r.exc.length) list.appendChild(el("p", "muted", "（無）"));
     for (const x of r.exc)
       list.appendChild(setRow(`${x.pattern} → ${x.exclude_state === "exclude" ? "不納入收支" : "納入收支"}`, x.source === "ai" ? "AI 自動" : "手動",
-        btn("🗑", () => del(`排除規則「${x.pattern}」`, () => Store.deleteExcludeRule(x.id), () => { exc = exc.filter(y => y !== x); }),
+        btn("刪除", () => del(`排除規則「${x.pattern}」`, () => Store.deleteExcludeRule(x.id), () => { exc = exc.filter(y => y !== x); }),
           "link danger", `刪除排除規則 ${x.pattern}`)));
     list.appendChild(el("h4", null, `非訂閱清單（${ig.length}）`));
     list.appendChild(el("p", "note", "在分析頁「定期扣款/訂閱」點過「非訂閱」的商家；刪掉＝撤銷（之後又會被自動偵測）。"));
     if (!ig.length) list.appendChild(el("p", "muted", "（無）"));
     for (const p of ig)
       list.appendChild(setRow(`${p} → 不列為訂閱`, null,
-        btn("🗑", () => del(`非訂閱標記「${p}」`, () => Store.deleteSubIgnore(p), () => { ign = ign.filter(y => y !== p); }),
+        btn("刪除", () => del(`非訂閱標記「${p}」`, () => Store.deleteSubIgnore(p), () => { ign = ign.filter(y => y !== p); }),
           "link danger", `撤銷非訂閱 ${p}`)));
   };
   q.addEventListener("input", () => { shown = 200; draw(); });
@@ -441,12 +441,12 @@ function filtersBody(b){
     const tg = btn(on ? "停用" : "啟用", () => busy(tg, err, () => Store.setFilterActive(r.id, !on)).then(ok => ok && refreshData()),
       "link", `${on ? "停用" : "啟用"}篩選器 ${r.name || ""}`);
     const row = setRow((r.name ? `${r.name}：` : "") + E.filterRuleSummary(r, S.labels), `優先序 ${r.priority ?? 100}` + (on ? "" : " · 已停用"),
-      tg, btn("🗑", () => confirmWrite("刪除這條篩選器？", [E.filterRuleSummary(r, S.labels), "刪掉後，符合條件的交易回到一般規則判斷。"],
+      tg, btn("刪除", () => confirmWrite("刪除這條篩選器？", [E.filterRuleSummary(r, S.labels), "刪掉後，符合條件的交易回到一般規則判斷。"],
         "刪除", () => Store.deleteFilterRule(r.id)), "link danger", `刪除篩選器 ${r.name || ""}`));
     if (!on) row.classList.add("off");
     b.appendChild(row);
   }
-  b.appendChild(btn("➕ 新增篩選器", filterDialog, ""));
+  b.appendChild(btn("新增篩選器", filterDialog, ""));
 }
 /** 新增篩選器（App FilterRuleDialog）：至少一個條件才可新增 */
 function filterDialog(){
@@ -485,7 +485,7 @@ function filterDialog(){
 /* ── 📧 信箱連結（只管自己的） ── */
 function mailBody(b){
   need(b, "mail", m => {
-    if (m) add(b, el("p", "income", `✅ 已連結：${m.gmail}` + (m.member_name ? `（${m.member_name}）` : "")),
+    if (m) add(b, el("p", "income", `已連結：${m.gmail}` + (m.member_name ? `（${m.member_name}）` : "")),
       add(el("div", "rowx"), btn("更新", () => mailDialog(m), ""), btn("解除連結", () => confirmWrite("解除信箱連結？", [
         `雲端撈取之後不再讀「${m.gmail}」；存在伺服器上的應用程式密碼會一併刪除。`,
         "想完全斷開，也可以到 Google 帳戶撤銷這組應用程式密碼。"], "解除", () => Store.removeMail()), "warnline")));
@@ -512,7 +512,7 @@ function mailDialog(m){
   check();
   f.save.addEventListener("click", async () => {
     const ok = await f.submit(() => Store.saveMail(gmail.value.trim(), E.appPassword(pw.value), name.value.trim()));
-    if (ok){ pw.value = ""; f.d.close(); toast("✅ 已儲存，下次撈信生效"); refreshData(); }
+    if (ok){ pw.value = ""; f.d.close(); toast("已儲存，下次撈信生效"); refreshData(); }
   });
 }
 
@@ -541,7 +541,7 @@ function sourcesBody(b){
   need(b, "sources", list => {
     const g = E.splitSources(list, isHidden);
     if (g.discovered.length){
-      const box = add(el("div", "info"), el("b", null, `📬 同步時在信箱發現 ${g.discovered.length} 個尚未設定的機構對帳單`));
+      const box = add(el("div", "info"), el("b", null, `同步時在信箱發現 ${g.discovered.length} 個尚未設定的機構對帳單`));
       for (const d of g.discovered)
         box.appendChild(setRow(srcName(d), `${d.from_contains} · ${d.mailbox}`,
           btn("設定啟用", () => sourceDialog(d)), btn("忽略", () => ignoreDialog(d))));
@@ -553,14 +553,14 @@ function sourcesBody(b){
       const def = E.parserDef(x.parser);
       const row = setRow(x.name, [x.mailbox, x.member_hint, def ? def.label : x.parser || "尚無解析器", x.hasPw ? "PDF 密碼已設定" : ""]
         .filter(Boolean).join(" · "), btn("✎", () => sourceDialog(x), "link", `編輯 ${x.name}`),
-        btn("🗑", () => confirmWrite(`刪除帳單來源「${x.name}」？`, ["之後不再從這個來源撈帳單；已經匯入的交易不受影響。",
+        btn("刪除", () => confirmWrite(`刪除帳單來源「${x.name}」？`, ["之後不再從這個來源撈帳單；已經匯入的交易不受影響。",
           "存在伺服器上的 PDF 密碼會一併刪除。"], "刪除", () => Store.deleteSource(x.id)), "link danger", `刪除 ${x.name}`));
       b.appendChild(row);
     }
-    b.appendChild(btn("➕ 新增帳單來源", () => sourceDialog(null), ""));
+    b.appendChild(btn("新增帳單來源", () => sourceDialog(null), ""));
     const n = g.ignored.length + g.hiddenLocal.length;
     if (!n) return;
-    const h = btn(`${MV.showIgnored ? "▾" : "▸"} 🚫 已忽略的機構（${n}）`, () => { MV.showIgnored = !MV.showIgnored; repaint(); }, "link");
+    const h = btn(`${MV.showIgnored ? "▾" : "▸"} 已忽略的機構（${n}）`, () => { MV.showIgnored = !MV.showIgnored; repaint(); }, "link");
     h.setAttribute("aria-expanded", String(MV.showIgnored));
     b.appendChild(add(el("div"), h));
     if (!MV.showIgnored) return;
@@ -577,7 +577,7 @@ function sourcesBody(b){
 /** 忽略發現的機構：永久（全家記住）或暫時（只這台瀏覽器）——文案照 App */
 function ignoreDialog(d){
   const f = confirmWrite(`忽略「${srcName(d)}」？`, ["永久忽略＝記住這個機構，全家所有裝置都不再偵測提示。",
-    "暫時隱藏＝只在這台瀏覽器隱藏，其他裝置仍會提示。", "兩種都可以之後在「🚫 已忽略的機構」自己復原。"],
+    "暫時隱藏＝只在這台瀏覽器隱藏，其他裝置仍會提示。", "兩種都可以之後在「已忽略的機構」自己復原。"],
   "永久忽略", () => Store.ignoreSource(d.id));
   f.save.before(btn("暫時隱藏", () => { f.d.close(); setHidden(d, true); }, ""));
 }
@@ -608,7 +608,7 @@ function sourceDialog(x){
     field("收信 Gmail（選成員自動帶入，可修改）", mailbox),
     field(!x ? "PDF 密碼（沒有就留空）" : x.hasPw ? "PDF 密碼（已設定；留空＝不變）" : "PDF 密碼（目前沒有；沒有就留空）", pw),
     el("p", "note", "通常是身分證字號。存進伺服器的加密保險箱，之後畫面上只顯示「已設定」。"),
-    adv, el("p", "note", "存好後，下次系統收信時才會生效（可按「🔄 立即同步」）。"));
+    adv, el("p", "note", "存好後，下次系統收信時才會生效（可按「立即同步」）。"));
   parser.addEventListener("change", () => {
     const d = E.parserDef(parser.value);
     if (d){
@@ -630,7 +630,7 @@ function sourceDialog(x){
     const ok = await f.submit(() => Store.setSource({ id: x && x.id, parser: parser.value, name: name.value.trim(), kind: kindOf(),
       from: from.value.trim(), subject: subject.value, member: member.value, mailbox: mailbox.value.trim(), password: pw.value.trim() })
       .catch(explain({ "23505": "已有同名、同收信信箱、同歸屬成員的帳單來源，請換個顯示名稱" })));
-    if (ok){ pw.value = ""; f.d.close(); toast("✅ 已儲存，下次撈信生效"); refreshData(); }
+    if (ok){ pw.value = ""; f.d.close(); toast("已儲存，下次撈信生效"); refreshData(); }
   });
 }
 
@@ -658,8 +658,8 @@ function ingestDialog(v){
   iv.inputMode = days.inputMode = "numeric";
   iv.value = String(v.interval_value); days.value = String(v.since_days);
   const unit = select(UNITS, v.interval_unit);
-  const [eRow, email] = checkbox("📧 信箱帳單", v.email_enabled), [nRow, notif] = checkbox("🔔 消費通知信", v.notif_enabled),
-        [iRow, inv] = checkbox("🧾 電子發票", v.einvoice_enabled), [aRow, auto] = checkbox("🕒 開啟自動排程", v.auto_enabled);
+  const [eRow, email] = checkbox("信箱帳單", v.email_enabled), [nRow, notif] = checkbox("消費通知信", v.notif_enabled),
+        [iRow, inv] = checkbox("電子發票", v.einvoice_enabled), [aRow, auto] = checkbox("開啟自動排程", v.auto_enabled);
   const hour = select([["不限", ""], ...Array.from({ length: 24 }, (_, h) => [`${h} 時`, String(h)])], v.run_hour == null ? "" : String(v.run_hour));
   add(f.body, add(el("div", "rowx"), field("每", iv), field("單位", unit)), field("每次往回撈幾天的帳單（1–365）", days),
     eRow, nRow, iRow, aRow, field("偏好時段（桌機用；雲端固定早上）", hour));
@@ -670,7 +670,7 @@ function ingestDialog(v){
     const ok = await f.submit(() => Store.saveIngest({ interval_value: n, interval_unit: unit.value, since_days: d,
       email_enabled: email.checked, notif_enabled: notif.checked, einvoice_enabled: inv.checked, auto_enabled: auto.checked,
       run_hour: hour.value === "" ? null : +hour.value }));
-    if (ok){ f.d.close(); toast(`✅ 已儲存，每 ${n} ${unitLabel(unit.value)}撈一次，下次生效`); refreshData(); }
+    if (ok){ f.d.close(); toast(`已儲存，每 ${n} ${unitLabel(unit.value)}撈一次，下次生效`); refreshData(); }
   });
 }
 
@@ -681,9 +681,9 @@ function billsBody(b){
   const list = activeReminders();
   if (!list.length) b.appendChild(el("p", "muted", "（尚無提醒）"));
   for (const r of list)
-    b.appendChild(setRow(`${r.name} · 每月 ${r.due_day} 日`, null, btn("🗑", () => confirmWrite(`刪除提醒「${r.name}」？`,
+    b.appendChild(setRow(`${r.name} · 每月 ${r.due_day} 日`, null, btn("刪除", () => confirmWrite(`刪除提醒「${r.name}」？`,
       ["明細頁不再提醒這筆繳款。"], "刪除", () => Store.deleteReminder(r.id)), "link danger", `刪除提醒 ${r.name}`)));
-  b.appendChild(btn("➕ 新增提醒", reminderDialog, ""));
+  b.appendChild(btn("新增提醒", reminderDialog, ""));
 }
 function reminderDialog(){
   const f = formDialog("新增繳費提醒", "新增");
@@ -700,10 +700,10 @@ function reminderDialog(){
 
 /* ── 🤖 AI 金鑰 ── */
 function aiBody(b){
-  b.appendChild(el("p", "note", "關鍵字沒涵蓋的商家交給 AI 自動歸類；沒有專屬解析器的機構帳單也由 AI 解析（標 ⚠️ 待核對）。" +
+  b.appendChild(el("p", "note", "關鍵字沒涵蓋的商家交給 AI 自動歸類；沒有專屬解析器的機構帳單也由 AI 解析（標 待核對）。" +
     "填哪家的金鑰都行、自動判別：Anthropic／OpenAI／Google Gemini／OpenRouter／Groq／xAI。金鑰加密存在伺服器，畫面上看不到。"));
   need(b, "ai", a => add(b, el("p", null, `AI 分類：${a.enabled ? "已啟用" : "未啟用"}`),
-    el("p", a.hasKey ? "income" : "muted", a.hasKey ? "✅ 已設定金鑰" : "尚未設定金鑰"), btn("修改", () => aiDialog(a), "")));
+    el("p", a.hasKey ? "income" : "muted", a.hasKey ? "已設定金鑰" : "尚未設定金鑰"), btn("修改", () => aiDialog(a), "")));
 }
 function aiDialog(a){
   const f = formDialog("AI 設定");
@@ -720,13 +720,13 @@ function aiDialog(a){
   on.addEventListener("change", check); key.addEventListener("input", check);
   check();
   f.save.addEventListener("click", async () => {
-    if (await f.submit(() => Store.saveAi(on.checked, key.value.trim()))){ key.value = ""; f.d.close(); toast("✅ 已儲存，下次撈信生效"); refreshData(); }
+    if (await f.submit(() => Store.saveAi(on.checked, key.value.trim()))){ key.value = ""; f.d.close(); toast("已儲存，下次撈信生效"); refreshData(); }
   });
 }
 
 /* ── ℹ️ 關於＋登出 ── */
 function aboutCard(){
-  const c = add(el("section", "card"), el("h3", null, "ℹ️ 關於網頁版"),
+  const c = add(el("section", "card"), el("h3", null, "關於網頁版"),
     el("p", "note", "網頁版會自動更新，不用重裝；可用瀏覽器選單「加到主畫面」當 App 用。字太小可用瀏覽器縮放（手機雙指放大、電腦 Ctrl＋）。"));
   if (!DEMO) c.appendChild(btn("登出", () => confirmWrite("確定要登出？", ["登出後需要重新用 Google 登入才能看到帳本。資料都在雲端，不會不見。"],
     "登出", () => Store.signOut(), () => location.reload()), "warnline"));
@@ -748,7 +748,7 @@ function bindJoin(){
       // 碼錯＝回 null（不是錯誤）；錯太多次＝資料庫丟中文訊息，plainError 會照講
       if (!(await Store.joinHousehold(c))){ msg.textContent = "邀請碼不存在，請再確認一次（英數字 8 碼）"; return; }
       joined = true;
-      msg.className = "muted"; msg.textContent = "✅ 已加入，載入中…";
+      msg.className = "muted"; msg.textContent = "已加入，載入中…";
       location.reload();
     } catch (e){
       console.warn("加入家庭失敗", e && e.code);
@@ -773,7 +773,7 @@ function bindJoin(){
     }
     step.name = name;
     create.disabled = true;   // 確認框開著時不能再開第二個（兩個一起按確認會同時跑同一組步驟）
-    const f = confirmWrite(`建立「${name}」？`, ["會建立一本全新的空帳本，你是第一位成員；之後在「👤 我的」頁拿邀請碼給家人加入。",
+    const f = confirmWrite(`建立「${name}」？`, ["會建立一本全新的空帳本，你是第一位成員；之後在「我的」頁拿邀請碼給家人加入。",
       el("p", "warn", "家人已經在用家計簿的話，請按取消、改用邀請碼加入。")], "建立",
     () => Store.createHousehold(name, step).catch(e => {
       if (step.member) throw new Error(`帳本「${name}」已建立，但預設分類沒建好（${plainError(e)}）；再按一次「建立」只會補做這一步`);

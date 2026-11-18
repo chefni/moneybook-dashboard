@@ -46,10 +46,10 @@ function buildDetailFrame(){
   DV.top = el("div");
   DV.search = el("input");
   DV.search.type = "search";
-  DV.search.placeholder = "🔍 搜尋商家或金額（跨月）";
+  DV.search.placeholder = "搜尋商家或金額（跨月）";
   DV.search.setAttribute("aria-label", "搜尋商家、備註或金額（跨月；依上方選的成員，合併＝全家；金額可打 4620 或 1000-2000）");
   DV.search.addEventListener("input", () => { DV.q = DV.search.value; runSearch(); });
-  DV.exportBtn = el("button", null, "⬇ 匯出");
+  DV.exportBtn = el("button", null, "匯出");
   DV.exportBtn.title = "把本期（目前成員）的明細存成 CSV";
   DV.exportBtn.addEventListener("click", exportCsv);
   DV.body = el("div");
@@ -63,10 +63,10 @@ function paintAlerts(){
   if (!over.length && !due.length && !income.pendingN) return;
   const box = el("div", "alert");
   box.setAttribute("role", "note");
-  for (const o of over) box.appendChild(el("div", null, `⚠️ ${o.label} 超支：已花 ${nt(o.spent)} / 預算 ${nt(o.budget)}`));
-  for (const x of due) box.appendChild(el("div", null, `💳 ${x.name} ${x.days === 0 ? "今天" : `${x.days} 天後`}到期（每月 ${x.day} 日）`));
+  for (const o of over) box.appendChild(el("div", null, `${o.label} 超支：已花 ${nt(o.spent)} / 預算 ${nt(o.budget)}`));
+  for (const x of due) box.appendChild(el("div", null, `${x.name} ${x.days === 0 ? "今天" : `${x.days} 天後`}到期（每月 ${x.day} 日）`));
   if (income.pendingN){
-    const b = el("button", null, `💰 ${income.pendingN} 筆待確認收入（${nt(income.pendingAmt)}）：自家轉入放超過 45 天仍找不到對應轉出，` +
+    const b = el("button", null, `${income.pendingN} 筆待確認收入（${nt(income.pendingAmt)}）：自家轉入放超過 45 天仍找不到對應轉出，` +
       "可能是漏記的收入 → 點這裡到「已排除」逐筆確認、真收入按「納入」。");
     b.addEventListener("click", () => { DV.view = "excluded"; drawBody(); });
     box.appendChild(b);
@@ -110,7 +110,7 @@ function agedChip(b){
   }
   if (!DV.aged || !DV.aged.length) return;
   const sum = DV.aged.reduce((a, t) => a + t.amount, 0);
-  const c = el("button", "info", `🔎 有 ${DV.aged.length} 筆刷卡通知超過 45 天還沒對到帳單（${E.compactNt(sum)}）——可能帳單漏收或漏抓，點看`);
+  const c = el("button", "info", `有 ${DV.aged.length} 筆刷卡通知超過 45 天還沒對到帳單（${E.compactNt(sum)}）——可能帳單漏收或漏抓，點看`);
   c.addEventListener("click", agedDialog);
   b.appendChild(c);
 }
@@ -138,7 +138,7 @@ function groupHead(key, label, g, amountCls, mark){
   const amt = el("span", "a " + (amountCls || ""), nt(g.total));
   if (mark && mark.pct != null) amt.appendChild(el("small", null, mark.pct + "%"));
   add(h, el("span", "m", `${open ? "▾" : "▸"} ${label}（${g.rows.length} 筆${g.off ? `，${g.off} 未計` : ""}）` +
-                          (g.suspect ? `  ⚠️${g.suspect}` : "")), amt);
+                          (g.suspect ? ` · ${g.suspect} 疑似重複` : "")), amt);
   if (sw) h.insertBefore(sw, h.firstChild);
   h.addEventListener("click", () => { open ? DV.open.delete(key) : DV.open.add(key); drawBody(); });
   return h;
@@ -163,7 +163,7 @@ function drawExpense(b, v){
   const groups = need ? needGroups(v.expRows) : v.groups;
   const slices = need ? groups.filter(g => g.total > 0).map(g => [g.key, g.total]) : v.byCat;
   const nameOf = need ? k => NEED_LABEL[k] : k => E.labelOf(k, S.labels);
-  if (need) b.appendChild(el("p", "note", "必要性＝📐 收入去向的分法。預設只有貸款、保險、學費、孝親算固定，其餘算消費；點單筆可自己改固定／消費。"));
+  if (need) b.appendChild(el("p", "note", "必要性＝收入去向的分法。預設只有貸款、保險、學費、孝親算固定，其餘算消費；點單筆可自己改固定／消費。"));
   pieChart(b, slices, nameOf);
   const marks = pieMarks(slices);
   for (const g of groups){
@@ -215,14 +215,14 @@ function subLine(r, text){
 /** 存款轉出的銀行備註一行（如「轉入 某銀行 · 給對方 倪netflix」）：看得出為什麼算成這一類；沒備註＝null */
 function noteLine(note){
   const t = E.bankNoteText(note);
-  return t ? el("small", "bnote", "📝 " + t) : null;
+  return t ? el("small", "bnote", "" + t) : null;
 }
 /** 支出單列（App ExpenseTxRow）：未計灰字刪除線＋白話原因；疑似重複可就地確認 */
 function expenseRow(r){
   const { t, ex, why, suspect } = r;
   const box = el("div", "li" + (ex ? " off" : ""));
   const main = el("button", "main");
-  add(main, add(el("span", "m"), el("span", null, (suspect ? "⚠️ " : "") + title(t)),
+  add(main, add(el("span", "m"), el("span", suspect ? "sus" : null, (suspect ? "疑似重複・" : "") + title(t)),
                 subLine(r, `${t.occurred_at} · ${E.statSource(t)}` + (t.fromAcct ? "（存款轉出）" : "") + (ex && why ? ` · ${E.friendlyReason(why)}（未計）` : "")),
                 t.fromAcct ? noteLine(t.note) : null),
       el("span", "a" + (ex || suspect ? " dim" : t.kind === "expense" ? " expense" : " income"), (t.kind === "expense" ? "−" : "＋") + nt(t.amount)));
@@ -361,7 +361,7 @@ function drawSearch(b){
     const row = el("button", "main");
     add(row, add(el("span", "m"), el("span", null, title(t)),
                  el("small", null, `${t.occurred_at} · ${E.labelOf(E.classifyF(t, S.catRules, S.filterRules, S.cats), S.labels)}` +
-                                   (owner ? ` · ${owner}` : "") + (t.dedup_status === "suspect" ? " · ⚠️疑似重複" : ""))),
+                                   (owner ? ` · ${owner}` : "") + (t.dedup_status === "suspect" ? " · 疑似重複" : ""))),
         el("span", "a " + (t.kind === "expense" ? "expense" : t.kind === "income" ? "income" : "dim"), nt(t.amount)));
     row.addEventListener("click", () => editTx(t));
     b.appendChild(add(el("div", "li"), row));
@@ -404,9 +404,9 @@ function editTx(t, st){
   add(body, el("b", null, title(t)),
     el("p", "muted", `${t.occurred_at} · ${E.kindLabel(t.kind)} ${nt(t.amount)}` + (exNow ? " · 目前不計收支" : "")),
     st || inPeriod ? null : el("p", "note", "這筆不在目前期間：互轉、退款這類自動判定，以那個月的明細為準。"));
-  const edit = el("button", "primary", "✏️ 編輯名稱/金額/日期/類型");
-  const exc = el("button", null, exNow ? "↩︎ 納入收支" : "🚫 不納入收支");
-  const del = el("button", "danger", "🗑 刪除");
+  const edit = el("button", "primary", "編輯名稱/金額/日期/類型");
+  const exc = el("button", null, exNow ? "︎ 納入收支" : "不納入收支");
+  const del = el("button", "danger", "刪除");
   edit.addEventListener("click", () => { d.close(); editFields(t); });
   exc.addEventListener("click", () => {
     d.close();
@@ -544,7 +544,7 @@ function sameBox(o){
   lo.inputMode = hi.inputMode = "numeric"; lo.placeholder = "最低"; hi.placeholder = "最高";
   lo.value = String(Math.floor(amt)); hi.value = String(Math.ceil(amt));
   const rng = add(el("div", "rng"), lo, el("span", null, "～"), hi);
-  const find = el("button", null, "🔍 找相同的紀錄"), msg = el("p", "note"), hits = el("div", "hits");
+  const find = el("button", null, "找相同的紀錄"), msg = el("p", "note"), hits = el("div", "hits");
   const panel = add(el("div", "same"), field(o.acc ? "摘要含" : "商家含", kw),
     o.acc ? el("p", "note", `限同一個帳戶：${E.accountDisplay(o.acc, S.members)}`) : null,
     limBox, rng, find, msg, hits,
@@ -591,7 +591,7 @@ function sameBox(o){
       }
       list.sort((a, b) => b.date.localeCompare(a.date));
       const total = list.reduce((s, x) => s + x.amount, 0);
-      const self = list.some(x => x.id === o.selfId) ? "含這筆" : "⚠️ 這筆本身不在條件內";
+      const self = list.some(x => x.id === o.selfId) ? "含這筆" : "這筆本身不在條件內";
       msg.textContent = list.length
         ? `找到 ${list.length} 筆（${self}），共 ${nt(total)}；${list[list.length - 1].date.slice(0, 10)} ～ ${list[0].date.slice(0, 10)}`
         : "找不到符合的紀錄：條件可能太嚴，這樣存的話連這筆都對不上";
@@ -609,7 +609,7 @@ function sameBox(o){
 function tripSection(t){
   const sec = el("details", "dsec");
   sec.hidden = true;
-  const sum = el("summary", null, "✈️ 行程歸屬"), hint = el("small"), list = el("div"), err = el("p", "warn");
+  const sum = el("summary", null, "行程歸屬"), hint = el("small"), list = el("div"), err = el("p", "warn");
   add(sec, add(sum, hint), list, err);
   let trips = [], ov = new Map();
   const draw = () => {
@@ -655,7 +655,7 @@ function categorySection(t, d){
     if (f && String(f.action).startsWith("cat:"))
       sec.appendChild(el("p", "warn", `這筆由篩選規則「${f.name || "未命名"}」分類，商家規則不會蓋過它。`));
     if (!String(t.merchant || "").trim()){
-      sec.appendChild(el("p", "note", "這筆沒有商家名，無法用商家規則；可用上面的「✏️ 編輯」補上名稱。"));
+      sec.appendChild(el("p", "note", "這筆沒有商家名，無法用商家規則；可用上面的「編輯」補上名稱。"));
       return sec;
     }
   }
@@ -738,7 +738,7 @@ function ruleBlocked(rule, t){
 function excludeDialog({ kind, id, state, pattern, excluded, label, blocked = null }){
   const verb = excluded ? "納入" : "不納入", target = excluded ? "include" : "exclude";
   const f = formDialog(excluded ? "改回納入收支" : "不納入收支", `只這一筆${verb}`);
-  const rule = el("button", "warnline", `⚠ 以後同「${label}」都${verb}（永久規則）`);
+  const rule = el("button", "warnline", `以後同「${label}」都${verb}（永久規則）`);
   const ruleOk = !blocked && !!String(pattern || "").trim();
   rule.disabled = !ruleOk;
   const others = ruleOk ? [rule] : [];   // 送出中一起停用；本來就不能按的別在失敗後被打開
@@ -824,7 +824,7 @@ function quickEntry(){
     });
     if (!ok) return;
     f.d.close();
-    toast(k === "expense" ? `✅ 已記一筆 ${nt(amount)} → ${E.labelOf(c, S.labels)}` : `✅ 已記收入 ${nt(amount)}`);
+    toast(k === "expense" ? `已記一筆 ${nt(amount)} → ${E.labelOf(c, S.labels)}` : `已記收入 ${nt(amount)}`);
     refreshData();
   });
   check();

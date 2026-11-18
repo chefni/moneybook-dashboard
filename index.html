@@ -44,9 +44,9 @@
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
 <script defer src="engine.js?v=6685cb4f28"></script>
-<script defer src="detail.js?v=09241fbd2c"></script>
-<script defer src="accounts.js?v=c63bff279a"></script>
-<script defer src="me.js?v=144230b155"></script>
+<script defer src="detail.js?v=f31fed618b"></script>
+<script defer src="accounts.js?v=95ccdc45f0"></script>
+<script defer src="me.js?v=2b56110643"></script>
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
@@ -56,6 +56,7 @@
     --accent-fill:#0b7285;   /* 白字的底色（按鈕、選中、徽章）：深淺色模式都用深色，白字才看得清 */
     --line:#dfe4ea; --track:#f1f2f6; --soft:#eef7fb;
     --warn-bg:#fdecea;       /* 提醒列（超支、到期、待確認收入）的底色 */
+    --ease:cubic-bezier(.22,1,.36,1);
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
@@ -67,52 +68,53 @@
   }
   * { box-sizing:border-box; margin:0; }
   [hidden] { display:none !important; }   /* 免得 .picker 的 display:grid 蓋掉 hidden */
-  body { font-family:"Noto Sans TC",system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:16px; max-width:760px; margin:0 auto;
+  body { font-family:"Noto Sans TC",system-ui,sans-serif; font-variant-numeric:tabular-nums; background:var(--bg); color:var(--ink); padding:16px; max-width:760px; margin:0 auto;
          /* viewport-fit=cover：瀏海與 Home 條的安全區自己留；底部再讓出分頁列＋「記一筆」鈕，最後一列才不會被擋住 */
          padding-top:max(16px, env(safe-area-inset-top)); padding-left:max(16px, env(safe-area-inset-left));
          padding-right:max(16px, env(safe-area-inset-right)); padding-bottom:calc(140px + env(safe-area-inset-bottom)); }
-  header { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; min-height:40px; }
+  header { display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap; min-height:40px; }
   /* 頂端列的鈕一樣高（立即同步、對帳簿；分析頁的總覽／區間分析分頁鈕也放這列） */
   header > button, header > a.btn { min-height:40px; box-sizing:border-box; }
-  a.btn { display:inline-flex; align-items:center; padding:7px 12px; border-radius:8px; border:1px solid var(--line);
+  a.btn { display:inline-flex; align-items:center; padding:8px 12px; border-radius:8px; border:1px solid var(--line);
           background:var(--card); color:var(--ink); text-decoration:none; }
   header > .chips { margin:0; }
-  h1 { font-size:21px; }
-  select,button,input { font:inherit; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
-  button { cursor:pointer; }
+  h1 { font-size:20px; font-weight:500; }
+  select,button,input { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
+  button { cursor:pointer; transition:background-color .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease), transform .15s var(--ease); }
+  button:focus-visible, a.btn:focus-visible { outline:2px solid var(--accent-ink); outline-offset:2px; }
   button:disabled { opacity:.45; cursor:default; }
   button.primary { background:var(--accent-fill); color:#fff; border:none; }
   button.link { border:none; background:none; color:var(--accent-ink); padding:4px 8px; font-size:13px; min-height:40px; }
   .spacer { flex:1; }
-  .card { background:var(--card); border-radius:14px; padding:18px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  .card { background:var(--card); border-radius:16px; padding:16px; border:1px solid var(--line); }
   .muted { color:var(--sub); font-size:13px; }
   .warn { color:var(--red); font-size:13px; }
   .expense { color:var(--red); } .income { color:var(--green); }
   .center { max-width:420px; margin:80px auto; text-align:center; }
   .center .card { padding:32px 24px; }
-  .err { color:var(--red); font-size:13px; min-height:18px; margin-top:10px; }
-  .chips { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 10px; }
-  .chip { border-radius:999px; padding:5px 13px; font-size:13px; min-height:36px; }
+  .err { color:var(--red); font-size:13px; min-height:20px; margin-top:12px; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 12px; }
+  .chip { border-radius:999px; padding:4px 12px; font-size:13px; min-height:36px; }
   .chip.active { background:var(--accent-fill); border-color:var(--accent-fill); color:#fff; }
-  .badge { background:var(--accent-fill); color:#fff; border-radius:6px; padding:3px 8px; font-size:12px; }
+  .badge { background:var(--accent-fill); color:#fff; border-radius:6px; padding:4px 8px; font-size:12px; }
 
   /* 期間列：◀ 標題 ▶，點標題開選單（同 App PeriodBar） */
   .period { display:flex; align-items:center; justify-content:space-between; }
-  .period .nav { border:none; background:none; font-size:18px; padding:6px 14px; }
+  .period .nav { border:none; background:none; font-size:16px; padding:8px 16px; color:var(--sub); }
   .period .nav:disabled { opacity:.3; cursor:default; }
-  .period .title { border:none; background:none; text-align:center; padding:2px 8px; }
-  .period .title b { display:block; font-size:18px; }
+  .period .title { border:none; background:none; text-align:center; padding:4px 8px; }
+  .period .title b { display:block; font-size:20px; font-weight:500; }
   .picker { margin:8px 0; display:grid; gap:10px; }
   .picker .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 
   /* 摺疊區塊（同 App FoldSection）：整條標題列可點，收合時看得到一句摘要 */
-  .fold { background:var(--card); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); margin-top:10px; overflow:hidden; }
+  .fold { background:var(--card); border-radius:16px; border:1px solid var(--line); margin-top:12px; overflow:hidden; }
   .fold > .head { display:block; width:100%; text-align:left; border:none; border-radius:0; background:none; padding:12px 16px; }
-  .fold > .head .t { display:flex; align-items:center; gap:8px; font-weight:600; font-size:16px; }
+  .fold > .head .t { display:flex; align-items:center; gap:8px; font-weight:500; font-size:16px; }
   .fold > .head .t span:first-child { flex:1; }
   .fold > .head .tog { color:var(--accent-ink); font-size:12px; font-weight:400; }
   .fold > .head .sum { color:var(--sub); font-size:13px; margin-top:2px; }
-  .fold > .body { padding:0 16px 14px; }
+  .fold > .body { padding:0 16px 16px; }
   .row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; padding:6px 0; font-size:14px; }
   .row b { font-size:16px; }
   .row.drill { width:100%; background:none; border:0; border-radius:8px; color:inherit; font:inherit; text-align:left; cursor:pointer; min-height:40px; }
@@ -125,11 +127,11 @@
   .sbar { padding:4px 0; cursor:pointer; }
   .sbar .lbl { display:flex; justify-content:space-between; gap:8px; font-size:14px; }
   .sbar .lbl span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .track { height:12px; border-radius:6px; background:var(--track); overflow:hidden; margin-top:3px; }
-  .track > div { height:100%; border-radius:6px; background:linear-gradient(90deg,#0abde3,#54a0ff); }
-  .track.inc > div { background:linear-gradient(90deg,#0b7a5e,#1dd1a1); }
+  .track { height:8px; border-radius:4px; background:var(--track); overflow:hidden; margin-top:4px; }
+  .track > div { height:100%; border-radius:4px; background:var(--accent-fill); }   /* 單色，不用漸層 */
+  .track.inc > div { background:var(--green); }
   .track.over > div { background:var(--red); }
-  .detail { margin:4px 0 8px 8px; padding:6px 10px; border-radius:8px; background:var(--soft); font-size:12px; }
+  .detail { margin:4px 0 8px 8px; padding:8px 12px; border-radius:8px; background:var(--soft); font-size:12px; }
   .detail .r { display:flex; justify-content:space-between; gap:8px; padding:3px 0; }
   .detail .r span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .detail .tot { border-top:1px solid var(--line); margin-top:4px; padding-top:4px; color:var(--sub); }
@@ -145,13 +147,13 @@
   .cmpg .cr > span { white-space:nowrap; }
   .cmpg .cr > span:first-child { text-align:left; white-space:normal; }
   .cmpg .cr.h { color:var(--sub); font-size:12px; padding:4px 0; }
-  .fold h4 { margin:14px 0 4px; font-size:14px; }
+  .fold h4 { margin:16px 0 4px; font-size:14px; font-weight:500; }
 
   .srcrow { display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; }
-  .srccard { flex:0 0 auto; text-align:left; padding:10px 12px; border-radius:12px; }
+  .srccard { flex:0 0 auto; text-align:left; padding:8px 12px; border-radius:12px; }
   .srccard.on { background:var(--soft); border-color:var(--accent); }
   .srccard small { display:block; color:var(--sub); font-size:12px; }
-  .srccard b { font-size:15px; }
+  .srccard b { font-size:16px; font-weight:500; }
   .tabs { display:flex; gap:6px; margin-bottom:8px; }
   .cwrap { position:relative; }
   .cwrap canvas { max-height:280px; }
@@ -160,7 +162,7 @@
   .sub .m { flex:1; min-width:0; }
   .exrow { display:flex; gap:10px; align-items:baseline; padding:5px 0; font-size:13px; color:var(--sub); border-bottom:1px dashed var(--line); }
   .exrow .n { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .exrow .r { border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:11px; }
+  .exrow .r { border:1px solid var(--line); border-radius:6px; padding:0 4px; font-size:12px; }
   .exrow .a { text-decoration:line-through; }
   /* ✈️ 旅遊 */
   .trip { border-bottom:1px solid var(--line); padding:6px 0 8px; }
@@ -174,11 +176,11 @@
   .txrow.off .a { text-decoration:line-through; }
   .txrow small.hint { color:var(--accent-ink); }
   .link.danger { color:var(--red); }
-  .dlg { margin:auto; border:none; border-radius:14px; padding:0;   /* margin:auto＝置中（* 的 margin:0 會蓋掉瀏覽器預設） */ width:min(520px, calc(100vw - 24px)); max-height:85vh;
+  .dlg { margin:auto; border:none; border-radius:16px; padding:0;   /* margin:auto＝置中（* 的 margin:0 會蓋掉瀏覽器預設） */ width:min(520px, calc(100vw - 24px)); max-height:85vh;
          background:var(--card); color:var(--ink); box-shadow:0 8px 30px rgba(0,0,0,.3); }
   .dlg::backdrop { background:rgba(0,0,0,.4); }
-  .dlg h3 { padding:16px 16px 6px; font-size:17px; }
-  .dlg h4 { margin:14px 0 4px; font-size:14px; }
+  .dlg h3 { padding:16px 16px 8px; font-size:16px; font-weight:500; }
+  .dlg h4 { margin:16px 0 4px; font-size:14px; font-weight:500; }
   .dbody { padding:0 16px; overflow-y:auto; max-height:calc(85vh - 110px); display:flex; flex-direction:column; gap:6px; }
   .dbody input:not([type=date]):not([type=checkbox]):not([type=radio]) { width:100%; }   /* 勾選框別被撐成整列寬（手機上框跑到中間、字被擠到右邊） */
   .same { display:grid; gap:8px; padding:10px; margin:2px 0 6px; border:1px solid var(--line); border-radius:10px; }
@@ -187,7 +189,7 @@
   .same .hits { display:grid; gap:2px; font-size:13px; }
   .same .hits div { display:flex; justify-content:space-between; gap:8px; border-top:1px solid var(--line); padding-top:4px; }
   .same .hits span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .dfoot { padding:10px 16px 14px; text-align:right; }
+  .dfoot { padding:12px 16px 16px; text-align:right; }
   .rowx { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .dfoot .warn { text-align:left; margin-bottom:8px; }
   .dfoot .warn:empty { display:none; }
@@ -196,11 +198,11 @@
   .fld { display:grid; gap:4px; font-size:13px; color:var(--sub); }
   .fld input, .fld select { color:var(--ink); min-height:40px; width:100%; }
   .dsec { border-top:1px solid var(--line); margin-top:8px; }
-  .dsec > summary { cursor:pointer; padding:10px 0; min-height:40px; font-weight:600; }
+  .dsec > summary { cursor:pointer; padding:8px 0; min-height:40px; font-weight:500; }
   .dsec > summary small { display:block; font-weight:400; color:var(--sub); font-size:12px; }
   .pick { display:block; width:100%; text-align:left; border:none; border-bottom:1px solid var(--line); border-radius:0;
           background:none; min-height:40px; }
-  .pick[aria-pressed="true"] { color:var(--accent-ink); font-weight:700; }
+  .pick[aria-pressed="true"] { color:var(--accent-ink); font-weight:600; }
   .chips.grid .chip { min-height:40px; }
   button.danger { color:var(--red); }
   button.primary.danger { background:var(--red); color:#fff; }
@@ -212,23 +214,24 @@
             background:var(--card); border-top:1px solid var(--line); padding-bottom:env(safe-area-inset-bottom); }
   .tabbar button { flex:1; max-width:253px; display:flex; flex-direction:column; align-items:center; gap:2px;
                    border:none; border-radius:0; background:none; min-height:56px; padding:6px 4px; font-size:12px; color:var(--sub); }
-  .tabbar button span { font-size:20px; line-height:1; }
-  .tabbar button[aria-current="page"] { color:var(--accent-ink); font-weight:700; }
+  .tabbar svg { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:1.75; stroke-linecap:round; stroke-linejoin:round; }   /* lucide 線條圖示（ISC） */
+  .tabbar button[aria-current="page"] { color:var(--accent-ink); font-weight:600; }
   .fab { position:fixed; z-index:21; right:max(16px, calc(50vw - 364px)); bottom:calc(68px + env(safe-area-inset-bottom));
-         border-radius:999px; min-height:48px; padding:10px 20px; font-weight:600; box-shadow:0 4px 14px rgba(0,0,0,.25); }
+         border-radius:999px; min-height:48px; padding:12px 20px; font-weight:500; box-shadow:0 8px 24px rgba(0,0,0,.14); }
+  .fab:active, button.primary:active { transform:scale(.97); }
   .toast { position:fixed; z-index:30; left:50%; transform:translateX(-50%); bottom:calc(126px + env(safe-area-inset-bottom));
            max-width:calc(100vw - 32px); background:var(--ink); color:var(--bg); border-radius:10px; padding:10px 16px;
-           font-size:14px; box-shadow:0 4px 14px rgba(0,0,0,.25); }
+           font-size:14px; box-shadow:0 8px 24px rgba(0,0,0,.14); }
 
   /* ── 明細與帳戶的清單列 ── */
   .alert { background:var(--warn-bg); border-radius:12px; padding:8px 12px; margin:6px 0; font-size:13px; display:grid; gap:2px; }
-  .alert button { text-align:left; border:none; background:none; padding:6px 0; min-height:40px; color:var(--red); font-weight:600; }
+  .alert button { text-align:left; border:none; background:none; padding:8px 0; min-height:40px; color:var(--red); font-weight:500; }
   .info { display:block; width:100%; text-align:left; border:none; border-radius:10px; background:var(--soft); padding:10px 12px;
           margin:6px 0; font-size:13px; min-height:40px; }
   .searchrow { display:flex; gap:8px; margin:6px 0; }
   .searchrow input { flex:1; min-width:0; min-height:40px; }
-  .ghead { display:flex; width:100%; align-items:center; gap:10px; text-align:left; border:none; border-bottom:1px solid var(--line);
-           border-radius:0; background:none; padding:12px 2px; min-height:48px; font-weight:600; }
+  .ghead { display:flex; width:100%; align-items:center; gap:8px; text-align:left; border:none; border-bottom:1px solid var(--line);
+           border-radius:0; background:none; padding:12px 4px; min-height:48px; font-weight:500; }
   .ghead .m { flex:1; min-width:0; }
   .ghead .a { text-align:right; display:flex; flex-direction:column; align-items:flex-end; }
   .ghead small { font-weight:400; font-size:12px; }
@@ -244,22 +247,25 @@
   .li.off .m > span:first-child { text-decoration:line-through; color:var(--sub); }
   .li .dim, .li.off .a { color:var(--sub); }
   .li .dup { display:flex; align-items:center; gap:2px; flex-wrap:wrap; padding:0 2px 6px; font-size:13px; color:var(--red); }
-  .li .dup .link { font-weight:700; }
+  .li .dup .link { font-weight:600; }
+  .li .sus { color:var(--red); }   /* 疑似重複的標題（取代 ⚠️） */
   .li .dup .link.ok { color:var(--green); }
   .tag { display:inline-block; background:var(--track); color:var(--sub); border-radius:6px; padding:1px 6px; font-size:12px; margin-right:4px; }
-  .tag.warn { background:var(--warn-bg); color:var(--red); font-weight:700; }
-  .big { display:block; font-size:30px; font-weight:700; margin:2px 0; }
-  .stats { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+  .tag.warn { background:var(--warn-bg); color:var(--red); font-weight:600; }
+  .big { display:table; font-size:28px; font-weight:500; line-height:1.2; margin:4px 0 8px;
+         /* 招牌細節：會計帳本的總額雙底線，只用在大總額 */
+         text-decoration:underline double var(--sub); text-decoration-thickness:1px; text-underline-offset:6px; }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
   .stats > div { border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
-  .stats b { display:block; font-size:16px; }
-  .spend { display:block; width:100%; text-align:left; border:none; margin-bottom:10px; }
-  .vh { margin:18px 0 6px; font-size:16px; }
+  .stats b { display:block; font-size:16px; font-weight:500; }
+  .spend { display:block; width:100%; text-align:left; border:1px solid var(--line); margin-bottom:12px; }
+  .vh { margin:24px 0 8px; font-size:16px; font-weight:500; }
 
   /* ── 👤 我的（第四階段，me.js）── */
-  #meView > .card { margin-top:10px; }
-  #meView h2 { font-size:20px; margin-bottom:6px; overflow-wrap:anywhere; }
-  #meView h3 { font-size:16px; margin:2px 0 4px; }
-  .code { font-family:ui-monospace,Consolas,monospace; font-size:24px; font-weight:700; letter-spacing:2px; color:var(--accent-ink);
+  #meView > .card { margin-top:12px; }
+  #meView h2 { font-size:20px; font-weight:500; margin-bottom:8px; overflow-wrap:anywhere; }
+  #meView h3 { font-size:16px; font-weight:500; margin:4px 0; }
+  .code { font-family:ui-monospace,Consolas,monospace; font-size:24px; font-weight:600; letter-spacing:2px; color:var(--accent-ink);
           user-select:all; -webkit-user-select:all; }   /* 複製不了時一按就全選，方便長按複製 */
   .setrow { display:flex; align-items:center; gap:4px; padding:6px 0; min-height:48px; border-bottom:1px dashed var(--line); font-size:14px; }
   .setrow .m { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
@@ -272,7 +278,7 @@
   .chk { display:flex; align-items:center; gap:10px; min-height:40px; font-size:14px; color:var(--ink); }
   .chk input { width:20px; height:20px; padding:0; }
   .join { display:grid; gap:8px; margin:14px 0 6px; text-align:left; }
-  .join input { min-height:44px; font-size:18px; text-align:center; letter-spacing:2px; }
+  .join input { min-height:44px; font-size:20px; text-align:center; letter-spacing:2px; }
   .center details { text-align:left; margin-top:16px; border-top:1px solid var(--line); padding-top:8px; }
   .center details > summary { cursor:pointer; min-height:40px; padding:8px 0; color:var(--accent-ink); }
   footer { margin:18px 0 8px; color:var(--sub); font-size:12px; }
@@ -280,7 +286,7 @@
     body { padding-top:max(12px, env(safe-area-inset-top)); padding-left:max(12px, env(safe-area-inset-left));
            padding-right:max(12px, env(safe-area-inset-right)); }
     header { gap:8px; }
-    h1 { font-size:19px; }
+    h1 { font-size:20px; }
   }
 </style>
 </head>
@@ -292,7 +298,7 @@
 
 <div id="login" class="center" hidden>
   <div class="card">
-    <h1 style="margin-bottom:8px">🏠 家計簿</h1>
+    <h1 style="margin-bottom:8px">家計簿</h1>
     <p class="muted" style="margin-bottom:18px">登入後檢視全家收支，資料即時更新</p>
     <button class="primary" style="width:100%" id="btnGoogle">使用 Google 登入</button>
     <p class="err" id="loginErr"></p>
@@ -301,9 +307,9 @@
 
 <div id="nomember" class="center" hidden>
   <div class="card">
-    <h1 style="margin-bottom:12px">🏠 家計簿</h1>
+    <h1 style="margin-bottom:12px">家計簿</h1>
     <p>這個帳號還沒加入家庭帳本。</p>
-    <p class="muted" style="margin-top:6px">請向家人要 8 碼的邀請碼（在對方家計簿的「👤 我的」頁）。</p>
+    <p class="muted" style="margin-top:6px">請向家人要 8 碼的邀請碼（在對方家計簿的「我的」頁）。</p>
     <!-- 加入／建立的程式在 me.js（bindJoin） -->
     <div class="join">
       <label class="fld"><span>邀請碼</span>
@@ -325,7 +331,7 @@
 
 <div id="errorBox" class="center" hidden>
   <div class="card">
-    <h1 style="margin-bottom:12px">😵 發生錯誤</h1>
+    <h1 style="margin-bottom:12px">發生錯誤</h1>
     <p class="warn" id="errorMsg" style="margin-bottom:18px"></p>
     <button class="primary" id="btnRetry">重試</button>
   </div>
@@ -338,8 +344,8 @@
     <div class="chips" id="anaTabs" role="group" aria-label="分析頁分頁" hidden></div>   <!-- 分析頁：📈 總覽／📅 區間分析 -->
     <span class="spacer"></span>
     <span id="demoBadge" class="badge" hidden>示範模式（合成資料）</span>
-    <button id="btnSync" hidden>🔄 立即同步</button>
-    <a id="billLink" class="btn" href="./billbook.html" hidden>📑 對帳簿</a>
+    <button id="btnSync" hidden>立即同步</button>
+    <a id="billLink" class="btn" href="./billbook.html" hidden>對帳簿</a>
   </header>
   <p class="warn" id="netMsg" role="alert" hidden></p>
   <div class="chips" id="chips"></div>
@@ -376,10 +382,10 @@
   <button class="primary fab" id="btnEntry">＋ 記一筆</button>
   <p class="toast" id="toast" role="status" aria-live="polite" hidden></p>
   <nav class="tabbar" id="tabbar" aria-label="分頁">
-    <button data-tab="accounts"><span aria-hidden="true">💼</span>帳戶</button>
-    <button data-tab="detail"><span aria-hidden="true">🧾</span>明細</button>
-    <button data-tab="analysis"><span aria-hidden="true">📊</span>分析</button>
-    <button data-tab="me"><span aria-hidden="true">👤</span>我的</button>
+    <button data-tab="accounts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/></svg>帳戶</button>
+    <button data-tab="detail"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/></svg>明細</button>
+    <button data-tab="analysis"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>分析</button>
+    <button data-tab="me"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>我的</button>
   </nav>
 </div>
 
@@ -549,7 +555,7 @@ let shownAt = null;
 function netOk(){ shownAt = new Date(); $("netMsg").hidden = true; }
 function netFail(e, what){
   console.warn("讀取失敗，畫面保留上一份", e);
-  const head = what ? `⚠️ ${what} 讀取失敗，` : "⚠️ ";
+  const head = what ? `${what} 讀取失敗，` : "";
   $("netMsg").textContent = navigator.onLine === false || /fetch|network/i.test(String(e && e.message))
     ? `${head}目前連不上伺服器，顯示的是 ${shownAt ? hhmm(shownAt.toISOString()) : "先前"} 的資料；恢復連線後會自動更新`
     : `${head}讀取最新資料失敗：` + (e && e.message ? e.message : e);
@@ -569,7 +575,7 @@ function buildChips(){
     b.addEventListener("click", () => { sel = val; buildChips(); render(true); });
     box.appendChild(b);
   };
-  mk("👨‍👩‍👧 合併", null);
+  mk("合併", null);
   // 「這是我」那位排在合併之後第一個（各人看到的都是自己在前）；其餘照名冊順序。只動這排按鈕，不改名冊的 sort_order
   const mine = m => (uid && m.user_id === uid ? 0 : 1);
   for (const m of [...S.members].sort((a, b) => mine(a) - mine(b))) mk(m.nickname || m.name || "成員", m.id);
@@ -647,9 +653,9 @@ function repaint(){
     if (tab === "accounts") paintAccounts();
     else if (tab === "me") paintMe();
     else if (lastData) paint(lastData, lastPeriod);
-  } catch (e){ console.error(e); $("netMsg").textContent = "⚠️ 畫面繪製失敗：" + (e && e.message ? e.message : e); $("netMsg").hidden = false; }
+  } catch (e){ console.error(e); $("netMsg").textContent = "畫面繪製失敗：" + (e && e.message ? e.message : e); $("netMsg").hidden = false; }
 }
-const tripFold = () => fold("trip", "✈️ 旅遊", tripState
+const tripFold = () => fold("trip", "旅遊", tripState
   ? `${tripState.trips.length} 趟行程` : "跨月的行程總花費（點開才載入）", paintTrips);
 
 /** 換頁或重畫前收掉舊圖表（Chart.js 不 destroy 會留著監聽與記憶體） */
@@ -681,7 +687,7 @@ function paintAnalysis(d, p){
 
   // ── 本期收支 ──
   root.appendChild(fold("sum", "本期收支",
-    prevTe > 0 ? `💬 這期共花 ${nt(te)}，比上期${te >= prevTe ? "多" : "少"}花 ${nt(Math.abs(te - prevTe))}` : `💬 這期共花 ${nt(te)}`,
+    prevTe > 0 ? `這期共花 ${nt(te)}，比上期${te >= prevTe ? "多" : "少"}花 ${nt(Math.abs(te - prevTe))}` : `這期共花 ${nt(te)}`,
     b => {
       add(b, row("支出", nt(te), "expense"));
       if (prevTe > 0){
@@ -700,7 +706,7 @@ function paintAnalysis(d, p){
   const rt = r.ratios;
   if (rt.base > 0 || rt.pending.n){
     const pct = v => (v == null ? "—" : `${v}%`);
-    root.appendChild(fold("ratio", "📐 收入去向（本期）",
+    root.appendChild(fold("ratio", "收入去向（本期）",
       rt.base > 0 ? `固定支出 ${pct(rt.pct.fixed)} · 消費支出 ${pct(rt.pct.free)} · 投資 ${pct(rt.pct.invest)} · 儲蓄 ${pct(rt.pct.saving)}` : "本期沒有真實收入，算不出比例", b => {
       add(b, el("p", "note", `各占「真實收入」${nt(rt.base)} 的比例。預設只有貸款、保險、學費、孝親算固定支出，其餘算消費支出；每一筆都可以在明細頁點開自己勾（也可讓之前與往後相同的紀錄比照）。存款轉出要先分用途才會算進來。`),
         drillRow("固定支出", `${nt(rt.fixed)}（${pct(rt.pct.fixed)}）`, rt.rows.fixed),
@@ -719,7 +725,7 @@ function paintAnalysis(d, p){
   // ── 📊 分類變化（較前一期） ──
   if (r.movers.length){
     const [c0, d0] = r.movers[0];
-    root.appendChild(fold("chg", "📊 分類變化（較前一期）", `變動最大：${L(c0)} ${d0 >= 0 ? "▲" : "▼"}${nt(Math.abs(d0))}`, b => {
+    root.appendChild(fold("chg", "分類變化（較前一期）", `變動最大：${L(c0)} ${d0 >= 0 ? "▲" : "▼"}${nt(Math.abs(d0))}`, b => {
       add(b, el("p", "note", "本期各分類支出與前一期相比，變動最大的：花更多＝紅、花更少＝綠。"));
       const g = add(el("div", "mv"), el("span", "h", "分類"), el("span", "h a", "本期"), el("span", "h a", "較前期"));
       for (const [c, delta, cur] of r.movers){
@@ -745,12 +751,12 @@ function paintAnalysis(d, p){
     const spentOf = k => (byCat.find(x => x[0] === k) || [, 0])[1];
     const overN = budgeted.filter(l => spentOf(l.key) > l.budget).length;
     root.appendChild(fold("budget", "本月預算",
-      `${budgeted.length} 項預算` + (overN ? ` · ⚠️ ${overN} 項超支` : " · 都在預算內"), b => {
+      `${budgeted.length} 項預算` + (overN ? ` · ${overN} 項超支` : " · 都在預算內"), b => {
         for (const l of budgeted){
           const spent = spentOf(l.key), over = spent > l.budget;
           const w = el("div", "sbar");
           add(w, add(el("div", "lbl"), el("span", null, l.label),
-            el("span", over ? "expense" : null, `${nt(spent)} / ${nt(l.budget)}` + (over ? `  ⚠️超支${nt(spent - l.budget)}` : ""))));
+            el("span", over ? "expense" : null, `${nt(spent)} / ${nt(l.budget)}` + (over ? `  超支${nt(spent - l.budget)}` : ""))));
           const fill = el("div");
           fill.style.width = Math.min(1, Math.max(0.02, spent / l.budget)) * 100 + "%";
           w.appendChild(add(el("div", "track inc" + (over ? " over" : "")), fill));
@@ -762,7 +768,7 @@ function paintAnalysis(d, p){
   // ── 💳 各卡/來源帳單 ──
   const bySrc = r.bySrc;
   if (bySrc.length){
-    root.appendChild(fold("src", "💳 各卡/來源帳單", `${bySrc.length} 個來源 · 最多：${bySrc[0][0]} ${nt(bySrc[0][1])}`, b => {
+    root.appendChild(fold("src", "各卡/來源帳單", `${bySrc.length} 個來源 · 最多：${bySrc[0][0]} ${nt(bySrc[0][1])}`, b => {
       add(b, el("p", "note", "點卡片或長條可展開該卡本期刷卡明細"));
       const rowEl = el("div", "srcrow");
       for (const [s, amt] of bySrc){
@@ -798,12 +804,12 @@ function paintAnalysis(d, p){
 
   // ── 🔁 定期扣款 / 訂閱 ──
   if (r.subs.length){
-    root.appendChild(fold("subs", "🔁 定期扣款 / 訂閱", subsSummary(r.subs), b => subsList(b, r.subs)));
+    root.appendChild(fold("subs", "定期扣款 / 訂閱", subsSummary(r.subs), b => subsList(b, r.subs)));
   }
 
   // ── 🚫 已排除（未計入收支） ──
   if (r.excluded.length){
-    root.appendChild(fold("excl", "🚫 已排除（未計入收支）", `${r.excluded.length} 筆互轉/退款/重複等`, b => {
+    root.appendChild(fold("excl", "已排除（未計入收支）", `${r.excluded.length} 筆互轉/退款/重複等`, b => {
       for (const x of r.excluded)
         b.appendChild(add(el("div", "exrow"), el("span", null, x.date.slice(5)), el("span", "n", `${x.dir}·${x.name}`),
           el("span", "r", x.reason), el("span", "a", nt(x.amount))));
@@ -815,7 +821,7 @@ function paintAnalysis(d, p){
 const subsSummary = subs => `${subs.length} 項 · 估每月約 ${nt(subs.reduce((a, s) => a + s.amount, 0))}`;
 function subsList(b, subs){
   add(b, el("p", "note", "每月同金額、同日期固定扣款的商家（停車、超商等按次消費已排除）。不是訂閱就點「非訂閱」移除並記住。"));
-  if (S.subIgnoreErr) add(b, el("p", "warn", "⚠️ 讀不到已設定的「非訂閱」清單，先前移除的項目可能又出現；重新整理再試。"));
+  if (S.subIgnoreErr) add(b, el("p", "warn", "讀不到已設定的「非訂閱」清單，先前移除的項目可能又出現；重新整理再試。"));
   for (const s of subs){
     const m = add(el("div", "m"), el("div", null, s.merchant),
       el("div", "muted", `連續 ${s.months} 個月同額同日 · 最近 ${s.lastDate}`));
@@ -860,10 +866,10 @@ function paintOverview(root){
   if ((openSec.get("cmp") || openSec.get("reg")) && (bulkDirty || !bulkState)) ensureBulk();
   const series = seriesFor();
   const cur = series && series[series.length - 1];
-  root.appendChild(fold("cmp", "📈 收支比較",
+  root.appendChild(fold("cmp", "收支比較",
     cur ? `本月至今：收入 ${nt(cur.ti)} · 支出 ${nt(cur.te)}` : "按月或按年比較收入與支出", b => paintCompare(b, series)));
   root.appendChild(tripFold());
-  root.appendChild(fold("reg", "🔁 定期（固定支出・攤提・定期扣款／訂閱）",
+  root.appendChild(fold("reg", "定期（固定支出・攤提・定期扣款／訂閱）",
     cur ? `本月固定支出 ${nt(cur.r.ratios.fixed)} · 訂閱 ${cur.r.subs.length} 項` : "每月都會出現的支出（點開才載入）",
     b => paintRegular(b, series)));
 }
@@ -894,7 +900,7 @@ function paintCompare(b, series){
   const now = thisMonth(), today = E.todayIso();
   // 每一列：標籤、圖上的短標籤、收入、支出、點了要去的區間（區間分析）
   const rows = ui.cmp === "month"
-    ? series.slice(-12).map(x => ({ label: `${x.y}/${pad(x.m)}${x.y === now.y && x.m === now.m ? "（至今）" : ""}`,
+    ? series.slice(-12).map(x => ({ label: x.y === now.y && x.m === now.m ? "本月至今" : `${x.y}/${pad(x.m)}`,
         short: `${String(x.y).slice(2)}/${pad(x.m)}`, ti: x.ti, te: x.te, period: E.Period.month(x.y, x.m) }))
     : E.yearlyTotals(series).map(a => ({
         label: `${a.y} 年` + (a.months < 12 ? `（${a.from}～${a.to} 月${a.y === now.y ? "，至今" : ""}）` : ""),
@@ -951,7 +957,7 @@ function paintRegular(b, series){
 
   // 📌 固定支出（依分類，點開逐筆）
   const fixed = r.ratios.rows.fixed;
-  b.appendChild(el("h4", null, `📌 固定支出 ${nt(r.ratios.fixed)}（${fixed.length} 筆）`));
+  b.appendChild(el("h4", null, `固定支出 ${nt(r.ratios.fixed)}（${fixed.length} 筆）`));
   if (!fixed.length) b.appendChild(el("p", "muted", "這個月還沒有固定支出"));
   const byCat = new Map();
   for (const t of fixed){ const k = E.classifyF(t, S.catRules, S.filterRules, S.cats); byCat.set(k, (byCat.get(k) || []).concat(t)); }
@@ -964,7 +970,7 @@ function paintRegular(b, series){
 
   // 📆 攤提中（大筆支出分到多個月，這個月分到的那一份）
   const am = r.exp.filter(t => t.amort);
-  b.appendChild(el("h4", null, `📆 攤提中 ${am.length ? nt(am.reduce((a, t) => a + t.amount, 0)) : ""}（${am.length} 筆）`));
+  b.appendChild(el("h4", null, `攤提中 ${am.length ? nt(am.reduce((a, t) => a + t.amount, 0)) : ""}（${am.length} 筆）`));
   if (!am.length) b.appendChild(el("p", "muted", "這個月沒有攤提中的支出（明細點一筆大額支出可設攤提）"));
   for (const t of am)
     b.appendChild(add(el("div", "sub"),
@@ -973,7 +979,7 @@ function paintRegular(b, series){
       el("span", null, `${nt(t.amount)}/月`)));
 
   // 🔁 定期扣款／訂閱
-  b.appendChild(el("h4", null, `🔁 定期扣款／訂閱（${subsSummary(r.subs)}）`));
+  b.appendChild(el("h4", null, `定期扣款／訂閱（${subsSummary(r.subs)}）`));
   if (r.subs.length) subsList(b, r.subs); else b.appendChild(el("p", "muted", "沒有偵測到定期扣款"));
 }
 
@@ -1028,7 +1034,7 @@ function paintTrips(b){
   if (tripDirty) ensureTrips();
   if (tripErr && !tripState){ const r = el("button", null, "重試"); r.addEventListener("click", reloadTrips); add(b, el("p", "warn", tripErr), r); return; }
   if (!tripState){ ensureTrips(); add(b, el("p", "muted", "讀取行程中…")); return; }
-  if (tripLoading) add(b, el("p", "muted", "🔄 更新中…"));
+  if (tripLoading) add(b, el("p", "muted", "更新中…"));
   else if (tripErr) add(b, el("p", "warn", tripErr + "（下方是上一次的資料）"));
   const { trips, overrides, txs, auto } = tripState;
   if (!trips.length) add(b, el("p", "muted", "還沒有行程。按下方「新增行程」，填上名稱與起訖日就好。"));
@@ -1073,7 +1079,7 @@ function paintTrips(b){
     }
     add(box, el("p", "note", `共 ${s.days} 天，平均每天 ${nt(Math.trunc(s.total / Math.max(1, s.days)))}` +
                               (s.manualN ? `　（${s.manualN} 筆手動調整過）` : "")));
-    const addBtn = el("button", null, "➕ 把其他消費加進這趟");
+    const addBtn = el("button", null, "把其他消費加進這趟");
     addBtn.addEventListener("click", () => tripAddDialog(tp));
     const del = el("button", "link danger", "刪除這趟行程");
     del.addEventListener("click", async () => {
@@ -1083,7 +1089,7 @@ function paintTrips(b){
     });
     add(box, addBtn, el("p", "note", "出發前訂的機票飯店、回國後才入帳的刷卡，都可以從這裡加進來。"), del);
   }
-  const nb = el("button", null, "➕ 新增行程");
+  const nb = el("button", null, "新增行程");
   nb.addEventListener("click", newTripDialog);
   add(b, nb);
 }
@@ -1146,7 +1152,7 @@ function field(label, input){ return add(el("label", "fld"), el("span", null, la
 const DB_ERRORS = new Map([
   // unique：帳戶、成員、分類、帳單來源都可能撞到，這裡只能講通用的；認得情境的地方（me.js 的 explain）會換成更準的話
   ["23505", "已經有同名的了，請換個名字"],
-  ["23503", "這筆還被其他紀錄引用（例如合併進來的重複交易指向它），不能刪除；可改用「🚫 不納入收支」"],   // 外鍵
+  ["23503", "這筆還被其他紀錄引用（例如合併進來的重複交易指向它），不能刪除；可改用「不納入收支」"],   // 外鍵
   // 資料庫還沒更新到這個功能要的版本（找不到函式／表／欄位）：功能優雅降級，講清楚原因，不丟英文
   ...["PGRST202", "42883", "42P01", "42703", "PGRST204"].map(c => [c, "這個功能需要先更新資料庫（伺服器上還沒有對應的設定），請告訴管理家計簿的人"])
 ]);
@@ -1207,8 +1213,8 @@ function tripTxDialog(tp, t){
   const err = el("p", "warn");
   add(body, el("b", null, t.merchant || t.note || "（無備註）"),
     el("p", "muted", `${t.occurred_at} · ${nt(t.amount)} · 目前分類：${E.labelOf(cur, S.labels)}`),
-    el("h4", null, "✈️ 行程歸屬"), el("p", "muted", `「${tp.name}」　目前：${E.tripMemberState(t, tp, ov)}`));
-  const mb = el("button", isIn ? null : "primary", isIn ? "➖ 移出這趟行程" : "➕ 加回這趟行程");
+    el("h4", null, "行程歸屬"), el("p", "muted", `「${tp.name}」　目前：${E.tripMemberState(t, tp, ov)}`));
+  const mb = el("button", isIn ? null : "primary", isIn ? "移出這趟行程" : "加回這趟行程");
   mb.addEventListener("click", async () => {
     mb.disabled = true;
     const a = E.tripTxAction(tp, t.occurred_at, !isIn);
@@ -1216,7 +1222,7 @@ function tripTxDialog(tp, t){
       d.close(); reloadTrips();
     } else mb.disabled = false;
   });
-  add(body, mb, err, el("p", "note", "這只影響「這趟旅行花多少」。這筆仍照常算在當月支出與原分類裡；要完全不計收支，請到「🧾 明細」分頁點這筆設「不納入收支」。"));
+  add(body, mb, err, el("p", "note", "這只影響「這趟旅行花多少」。這筆仍照常算在當月支出與原分類裡；要完全不計收支，請到「明細」分頁點這筆設「不納入收支」。"));
   if (t.merchant){
     const pick = el("select");
     const opts = E.categoryOptions(S.labels);
@@ -1244,7 +1250,7 @@ function tripAddDialog(tp){
   const already = new Set(tripState.txs.filter(t => E.inTrip(t, tp, ov)).map(t => t.id));
   const addedIds = new Set();
   const { d, body } = dialog(`加進「${tp.name}」`);
-  const q = el("input"); q.placeholder = "🔍 搜尋商家或備註";
+  const q = el("input"); q.placeholder = "搜尋商家或備註";
   const info = el("p", "muted"), err = el("p", "warn"), list = el("div");
   add(body, el("p", "note", `只會列出不在行程區間（${tp.start_date} ~ ${tp.end_date}）內的消費——區間內的本來就已經算進去了。不搜尋＝列出行程前後 14 天的。`),
     q, info, err, list);
@@ -1511,7 +1517,7 @@ function buildAnaTabs(){
   const box = $("anaTabs");
   box.hidden = tab !== "analysis";
   box.replaceChildren();
-  for (const [v, label] of [["overview", "📈 總覽"], ["range", "📅 區間分析"]]){
+  for (const [v, label] of [["overview", "總覽"], ["range", "區間分析"]]){
     const b = el("button", "chip" + (ui.ana === v ? " active" : ""), label);
     b.setAttribute("aria-pressed", String(ui.ana === v));
     b.addEventListener("click", () => { if (ui.ana !== v){ ui.ana = v; applyTab(); window.scrollTo(0, 0); repaint(); } });
@@ -1647,7 +1653,7 @@ async function showLastSync(prefix = ""){
     .eq("household_id", hid).eq("status", "done").order("finished_at", { ascending: false }).limit(1);
   const last = [s?.last_run_at, done?.[0]?.finished_at].filter(Boolean).sort().pop();
   $("syncMsg").textContent = prefix + (last ? `上次同步 ${hhmm(last)}` : "") +
-    (s?.last_error ? `　⚠️ 上次撈取有錯誤：${(String(s.last_error).split("\n").filter(Boolean).pop() || "").slice(0, 80)}` : "");
+    (s?.last_error ? `　上次撈取有錯誤：${(String(s.last_error).split("\n").filter(Boolean).pop() || "").slice(0, 80)}` : "");
 }
 async function watchSync(id){
   syncing = true;
@@ -1660,9 +1666,9 @@ async function watchSync(id){
   }
   syncing = false;
   $("btnSync").disabled = false;
-  if (st === "done"){ await refreshData(); await showLastSync("✅ 同步完成，畫面已更新　"); }
-  else if (st === "failed") $("syncMsg").textContent = "❌ 這次撈取失敗了；資料沒有遺失，下次同步會重撈同一段時間";
-  else $("syncMsg").textContent = "⚠️ 同步逾時（超過 30 分鐘），請稍後再試";
+  if (st === "done"){ await refreshData(); await showLastSync("同步完成，畫面已更新　"); }
+  else if (st === "failed") $("syncMsg").textContent = "這次撈取失敗了；資料沒有遺失，下次同步會重撈同一段時間";
+  else $("syncMsg").textContent = "同步逾時（超過 30 分鐘），請稍後再試";
   if (st !== "done" && tab === "me") paintMe();   // 我的頁的同步鈕跟著恢復可按（done 時 refreshData 已重畫）
 }
 async function startSync(){
@@ -1679,13 +1685,13 @@ async function startSync(){
     if (m.includes("uniq_sync_pending") || m.includes("duplicate key")){
       // 別台裝置（或 App）的同步還在跑：接著等它，完成時一樣自動更新
       const { data: p } = await sb.from("sync_requests").select("id").eq("household_id", hid).eq("status", "pending").limit(1);
-      $("syncMsg").textContent = "⏳ 已有一次同步在進行中，完成後畫面會自己更新";
+      $("syncMsg").textContent = "已有一次同步在進行中，完成後畫面會自己更新";
       if (p && p.length) watchSync(p[0].id);
       return;
     }
     // 其他中文訊息是資料庫自己講的白話（例：v94 之後新建的家庭「這個家庭尚未啟用雲端撈取」）：照講，不要誤導成網路問題
-    $("syncMsg").textContent = m.includes("過於頻繁") ? "⏳ 剛剛才同步過，請等約一分鐘再按"
-      : HAS_CJK.test(m) ? "❌ " + m : "❌ 送出失敗，請確認網路後再試";
+    $("syncMsg").textContent = m.includes("過於頻繁") ? "剛剛才同步過，請等約一分鐘再按"
+      : HAS_CJK.test(m) ? m : "送出失敗，請確認網路後再試";
     return;
   }
   watchSync(data.id);

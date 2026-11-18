@@ -58,13 +58,13 @@ function paintAccountList(root){
     } else root.appendChild(el("p", "muted", "讀取帳戶中…"));
     return;
   }
-  if (AV.loading) root.appendChild(el("p", "muted", "🔄 更新中…"));
+  if (AV.loading) root.appendChild(el("p", "muted", "更新中…"));
   else if (AV.err) root.appendChild(el("p", "warn", AV.err + "（下方是上一次的資料）"));
   const [accounts, snaps] = E.forMember(S.accounts, AV.snaps, sel, S.members);
   if (!accounts.length){
     const who = S.members.find(m => m.id === sel);
     root.appendChild(el("p", "muted", who ? `${E.nickOf(who)} 名下尚無資產帳戶`
-      : "尚無資產資料（按上方「🔄 立即同步」匯入銀行對帳單，或在下方手動新增帳戶）"));
+      : "尚無資產資料（按上方「立即同步」匯入銀行對帳單，或在下方手動新增帳戶）"));
   } else {
     const pf = E.portfolio(accounts, snaps);
     // 使用者要求（2026-11-14）：淨值趨勢放最上面、淨資產卡移到原本趨勢圖的位置（頁尾）
@@ -75,7 +75,7 @@ function paintAccountList(root){
     investSection(root, pf);
     add(root, el("h3", "vh", "淨資產"), netWorthCard(pf));
   }
-  const addBtn = el("button", null, "➕ 手動新增帳戶");
+  const addBtn = el("button", null, "手動新增帳戶");
   addBtn.addEventListener("click", addAccountDialog);
   add(root, el("div", "hr"), addBtn, el("p", "note", "沒有對帳單的銀行/證券戶或現金，也能手動記餘額。"));
 }
@@ -136,7 +136,7 @@ function groupRows(root, g){
 /** 📈 投資理財（App InvestSection）：總覽、持股明細、資產配置（淨值趨勢已移到頁首） */
 function investSection(root, pf){
   if (!pf.accounts.some(a => a.type === "stock")) return;
-  root.appendChild(el("h3", "vh", "📈 投資理財"));
+  root.appendChild(el("h3", "vh", "投資理財"));
   const iv = pf.invest;
   if (!iv) add(root, el("b", null, "投資總覽"), el("p", "muted", pf.holdings.length ? "尚無成本資料（需重灌含成本的快照）" : "無證券持倉"));
   else root.appendChild(add(el("section", "card"), el("span", "muted", `目前${iv.pl >= 0 ? "獲利" : "虧損"}（未實現）`),
@@ -292,7 +292,7 @@ function purposeDialog(a, acc){
   pick.addEventListener("change", check);
   fixedChk.addEventListener("change", () => { touched = true; refresh(); });
   add(f.body, el("b", null, a.description || "（無摘要）"), el("p", "muted", `${a.occurred_at} · ${E.ntD(Math.abs(a.amount))} · ${E.accountDisplay(acc, S.members)}`),
-      E.bankNoteText(a.note, 200) ? el("p", "note", "📝 銀行備註：" + E.bankNoteText(a.note, 200)) : null,
+      E.bankNoteText(a.note, 200) ? el("p", "note", "銀行備註：" + E.bankNoteText(a.note, 200)) : null,
     field("這筆算成", pick), remember, natSec,
     el("p", "note", "「不計」＝不算消費（例如繳卡費、自己帳戶間搬錢、轉去證券戶買股——股票由證券對帳單記成投資）；" +
       "選分類＝算成那一類的支出。"));
@@ -340,7 +340,7 @@ function balanceDialog(acc, s){
     if (isStock && cost.value.trim() && (c == null || c < 0)){ f.err.textContent = "成本只能填 0 以上的數字"; return; }
     if (s && s.snapshot_date === today && b !== s.balance && !armed){
       armed = true;
-      f.err.textContent = `⚠️ 今天已記過餘額 ${E.ntD(s.balance)}，確定改成 ${E.ntD(b)} 請再按一次「儲存」`;
+      f.err.textContent = `今天已記過餘額 ${E.ntD(s.balance)}，確定改成 ${E.ntD(b)} 請再按一次「儲存」`;
       return;
     }
     if (await f.submit(() => Store.setSnapshot(acc.id, b, c, today))){ f.d.close(); refreshData(); }
