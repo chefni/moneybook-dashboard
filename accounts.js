@@ -67,12 +67,8 @@ function paintAccountList(root){
       : "尚無資產資料（按上方「立即同步」匯入銀行對帳單，或在下方手動新增帳戶）"));
   } else {
     const pf = E.portfolio(accounts, snaps);
-    // 使用者要求（2026-11-14）：淨值趨勢放最上面、淨資產卡移到原本趨勢圖的位置（頁尾）
-    root.appendChild(el("h3", "vh", "淨值趨勢"));
-    trendChart(root, pf.trend, "淨值趨勢折線圖");
-    root.appendChild(el("p", "note", "點分組展開帳戶明細"));
-    for (const g of pf.groups) groupRows(root, g);
-    investSection(root, pf);
+    // 醫師要求（2026-11-25）：拿掉淨值趨勢；帳戶分組與持股明細併進「資產配置」，接在圓環圖下面。淨資產卡仍在頁尾
+    allocSection(root, pf);
     add(root, el("h3", "vh", "淨資產"), netWorthCard(pf));
   }
   const addBtn = el("button", null, "手動新增帳戶");
@@ -109,12 +105,31 @@ function netWorthCard(pf){
   return c;
 }
 
-/** 一個分組（預設收合）：標題列有合計與損益，展開後逐帳戶 */
-function groupRows(root, g){
+/** 資產配置：圓環圖 → 各分組（色塊與占比同圓環，點開逐帳戶）→ 持股明細 */
+function allocSection(root, pf){
+  root.appendChild(el("h3", "vh", "資產配置"));
+  const total = pf.alloc.reduce((t, x) => t + x[1], 0);
+  if (total > 0 && window.Chart) chartBox(root, "資產配置圓環圖（數值見下方各分組）", cv => donut(cv, pf.alloc, total));
+  root.appendChild(el("p", "note", "點分組展開帳戶明細"));
+  const marks = new Map(pf.alloc.map(([g, v], i) => [g, { color: pieColor(i), pct: Math.round(v * 100 / total) }]));
+  for (const g of pf.groups) groupRows(root, g, marks.get(g.name));
+  holdingRows(root, pf);
+}
+/** 標題列最前面的色塊：有對應圓環的上色，沒有的（負債、持股明細）留空位對齊 */
+function swatch(mark){
+  const sw = el("i", "sw");
+  sw.setAttribute("aria-hidden", "true");
+  if (mark) sw.style.background = mark.color;
+  return sw;
+}
+
+/** 一個分組（預設收合）：標題列有色塊、占比、合計與損益，展開後逐帳戶 */
+function groupRows(root, g, mark){
   const key = g.name, open = AV.open.has(key);
   const h = el("button", "ghead");
   h.setAttribute("aria-expanded", String(open));
-  add(h, el("span", "m", `${open ? "▾" : "▸"} ${g.name}（${g.rows.length}）`),
+  add(h, swatch(mark), add(el("span", "m", `${open ? "▾" : "▸"} ${g.name}（${g.rows.length}）`),
+                           mark ? el("small", "dim", `　${mark.pct}%`) : null),
     add(el("span", "a"), el("span", g.total < 0 ? "expense" : null, E.ntD(g.total)),
         g.cost > 0 ? el("small", g.pl >= 0 ? "gain" : "loss", E.plLabel(g.pl, g.pl * 100 / g.cost)) : null));
   h.addEventListener("click", () => { open ? AV.open.delete(key) : AV.open.add(key); paintAccounts(); });
@@ -133,42 +148,30 @@ function groupRows(root, g){
   }
 }
 
-/** 📈 投資理財（App InvestSection）：總覽、持股明細、資產配置（淨值趨勢已移到頁首） */
-function investSection(root, pf){
+/** 持股明細（原「投資理財」）：標題列＝市值＋未實現損益，展開＝成本與各檔持股 */
+function holdingRows(root, pf){
   if (!pf.accounts.some(a => a.type === "stock")) return;
-  root.appendChild(el("h3", "vh", "投資理財"));
-  const iv = pf.invest;
-  if (!iv) add(root, el("b", null, "投資總覽"), el("p", "muted", pf.holdings.length ? "尚無成本資料（需重灌含成本的快照）" : "無證券持倉"));
-  else root.appendChild(add(el("section", "card"), el("span", "muted", `目前${iv.pl >= 0 ? "獲利" : "虧損"}（未實現）`),
-    el("span", "big " + (iv.pl >= 0 ? "gain" : "loss"), (iv.pl >= 0 ? "+" : "") + E.ntD(iv.pl)),
-    el("b", iv.pl >= 0 ? "gain" : "loss", `報酬率 ${E.signedPct(iv.pct)}%`),
-    add(el("div", "stats"), add(el("div"), el("span", "muted", "市值"), el("b", null, E.ntD(iv.mv))),
-                            add(el("div"), el("span", "muted", "成本"), el("b", null, E.ntD(iv.cost))))));
-  const h = el("button", "ghead");
+  const iv = pf.invest, h = el("button", "ghead");
   h.setAttribute("aria-expanded", String(AV.holdings));
-  h.appendChild(el("span", "m", `${AV.holdings ? "▾" : "▸"} 持股明細（${pf.holdings.length}）`));
+  add(h, swatch(null), el("span", "m", `${AV.holdings ? "▾" : "▸"} 持股明細（${pf.holdings.length}）`),
+    iv ? add(el("span", "a"), el("span", null, E.ntD(iv.mv)), el("small", iv.pl >= 0 ? "gain" : "loss", E.plLabel(iv.pl, iv.pct))) : null);
   h.addEventListener("click", () => { AV.holdings = !AV.holdings; paintAccounts(); });
   root.appendChild(h);
-  if (AV.holdings){
-    if (!pf.holdings.length) root.appendChild(el("p", "muted", "無證券持倉"));
-    for (const { a, s } of pf.holdings){
-      const name = String(a.name), dot = name.indexOf("·");
-      const pl = s.cost > 0 ? s.balance - s.cost : null;
-      const row = el("button", "main");
-      add(row, add(el("span", "m"), el("span", null, dot >= 0 ? name.slice(dot + 1) : name),
-                   el("small", null, `${dot >= 0 ? name.slice(0, dot) : name} · ${s.snapshot_date}`)),
-          add(el("span", "a"), el("b", null, E.ntD(s.balance)),
-              pl == null ? null : el("small", pl >= 0 ? "gain" : "loss", `${pl >= 0 ? "+" : ""}${E.ntD(pl)}（${E.signedPct(pl * 100 / s.cost)}%）`)));
-      row.addEventListener("click", () => openAccount(a.id));
-      root.appendChild(add(el("div", "li"), row));
-    }
+  if (!AV.holdings) return;
+  if (!pf.holdings.length){ root.appendChild(el("p", "muted", "無證券持倉")); return; }
+  root.appendChild(el("p", "note", iv ? `未實現損益＝市值 ${E.ntD(iv.mv)} − 成本 ${E.ntD(iv.cost)}（只算有成本資料的持股）`
+                                      : "尚無成本資料（需重灌含成本的快照），所以沒有損益"));
+  for (const { a, s } of pf.holdings){
+    const name = String(a.name), dot = name.indexOf("·");
+    const pl = s.cost > 0 ? s.balance - s.cost : null;
+    const row = el("button", "main");
+    add(row, add(el("span", "m"), el("span", null, dot >= 0 ? name.slice(dot + 1) : name),
+                 el("small", null, `${dot >= 0 ? name.slice(0, dot) : name} · ${s.snapshot_date}`)),
+        add(el("span", "a"), el("b", null, E.ntD(s.balance)),
+            pl == null ? null : el("small", pl >= 0 ? "gain" : "loss", `${pl >= 0 ? "+" : ""}${E.ntD(pl)}（${E.signedPct(pl * 100 / s.cost)}%）`)));
+    row.addEventListener("click", () => openAccount(a.id));
+    root.appendChild(add(el("div", "li"), row));
   }
-  root.appendChild(el("h3", "vh", "資產配置"));
-  const total = pf.alloc.reduce((t, x) => t + x[1], 0);
-  if (total > 0){
-    if (window.Chart) chartBox(root, "資產配置圓環圖（數值見下方）", cv => donut(cv, pf.alloc, total));
-    for (const [g, v] of pf.alloc) root.appendChild(row2(`${g}　${Math.round(v * 100 / total)}%`, E.ntD(v)));
-  } else root.appendChild(el("p", "muted", "沒有正餘額的帳戶"));
 }
 
 /* ═══════════ 帳戶明細 ═══════════ */
@@ -430,6 +433,7 @@ function donut(cv, alloc, total){
   charts.push(new Chart(cv, { type: "doughnut",
     data: { labels: alloc.map(([g, v]) => `${g} ${Math.round(v * 100 / total)}%`),
             datasets: [{ data: alloc.map(x => x[1]), backgroundColor: alloc.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]), borderWidth: 0 }] },
-    options: { plugins: { legend: { position: "bottom", labels: { color: css("--ink"), boxWidth: 12 } },
-                          tooltip: { callbacks: { label: c => `${c.label} ${E.ntD(c.raw)}` } } } } }));
+    // 不畫圖例：色塊與占比在下面各分組標題列（同明細頁圓餅）；提示框只留一行
+    options: { animation: false, plugins: { legend: { display: false },
+                          tooltip: { callbacks: { title: () => "", label: c => `${c.label} ${E.ntD(c.raw)}` } } } } }));
 }
