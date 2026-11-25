@@ -406,10 +406,17 @@ function autoRulesBody(b){
     const ig = [...S.subIgnores].sort().filter(p => !qq || p.includes(qq.toLowerCase()));
     list.replaceChildren();
     if (qq) list.appendChild(el("p", "muted", `找到 ${fr.length + r.cat.length + r.exc.length + ig.length} 條`));
-    // 搜尋時沒找到的分組整組不畫，清單才短
+    // 各組預設收合；搜尋時有命中的組自動展開（不然結果看不到）。手動點過的照手動（MV.ruleOpen）。搜尋時沒命中的組整組不畫。
     const section = (title, items, rowOf, note) => {
       if (qq && !items.length) return;
-      list.appendChild(el("h4", null, `${title}（${items.length}）`));
+      const set = MV.ruleOpen || (MV.ruleOpen = new Map());
+      const open = set.has(title) ? set.get(title) : !!qq;
+      const h = el("button", "ghead");
+      h.setAttribute("aria-expanded", String(open));
+      add(h, el("span", "m", `${open ? "▾" : "▸"} ${title}（${items.length}）`));
+      h.addEventListener("click", () => { set.set(title, !open); draw(); });
+      list.appendChild(h);
+      if (!open) return;
       if (note && !qq) list.appendChild(el("p", "note", note));
       if (!items.length){ list.appendChild(el("p", "muted", "（無）")); return; }
       for (const x of items.slice(0, lim)) list.appendChild(rowOf(x));
@@ -442,7 +449,7 @@ function autoRulesBody(b){
       btn("刪除", () => del(`非訂閱標記「${p}」`, () => Store.deleteSubIgnore(p)), "link danger", `撤銷非訂閱 ${p}`)),
       "在分析頁「定期扣款/訂閱」點過「非訂閱」的商家；刪掉＝撤銷（之後又會被自動偵測）。");
   };
-  q.addEventListener("input", () => { MV.ruleQ = q.value; MV.ruleShown = RULES_PAGE; draw(); });
+  q.addEventListener("input", () => { MV.ruleQ = q.value; MV.ruleShown = RULES_PAGE; MV.ruleOpen = null; draw(); });
   draw();
 }
 /** 學到的商家分類 → 換一個分類（同一個 RPC：同商家覆寫） */
