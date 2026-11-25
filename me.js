@@ -63,6 +63,7 @@ Object.assign(LiveStore, {
 
   // ── 篩選器、繳費提醒 ──
   addFilterRule: row => affected(sb.from("filter_rules").insert({ household_id: hid, ...row })),
+  updateFilterRule: (id, row) => affected(sb.from("filter_rules").update(row).eq("id", id)),
   setFilterActive: (id, active) => affected(sb.from("filter_rules").update({ active }).eq("id", id)),
   deleteFilterRule: id => affected(sb.from("filter_rules").delete().eq("id", id)),
   addReminder: (name, due_day) => affected(sb.from("bill_reminders").insert({ household_id: hid, name, due_day })),
@@ -199,10 +200,9 @@ function paintMe(){
     el("h3", "vh", "記帳規則"),
     fold("me:labels", "消費分類與預算", `${S.labels.length} 類` +
       (S.labels.some(l => l.budget > 0) ? `，${S.labels.filter(l => l.budget > 0).length} 類有設預算` : "，都沒設預算"), labelsBody),
-    fold("me:rules", "已學習的規則",
-      `分類規則 ${S.catRules.length}・排除規則 ${S.excludeRules.length}・非訂閱 ${S.subIgnores.size}`, rulesBody),
-    fold("me:filters", "篩選器（自動規則）", S.filterRules.length
-      ? `${S.filterRules.length} 條（${S.filterRules.filter(r => r.active !== false).length} 條啟用中）` : "尚無篩選器", filtersBody),
+    fold("me:rules", "自動規則",
+      `自訂的 ${S.filterRules.length} 條（${S.filterRules.filter(r => r.active !== false).length} 條啟用中）・` +
+      `學到的 ${S.catRules.length + S.excludeRules.length + S.subIgnores.size} 條`, autoRulesBody),
     el("h3", "vh", "進階設定"),
     fold("me:mail", "信箱連結", !loaded("mail") ? "設定要從哪個信箱撈帳單"
       : mail ? `已連結 ${mail.gmail}` : "你還沒連結信箱", mailBody),
@@ -381,104 +381,123 @@ function deleteLabelDialog(l){
   const n = S.catRules.filter(r => r.category === l.key).length + S.filterRules.filter(r => r.action === "cat:" + l.key).length;
   confirmWrite(`刪除分類「${l.label}」？`, [
     "刪除後選單裡不再有這一類。",
-    n ? el("p", "warn", `有 ${n} 條規則把商家歸到這一類；刪掉後它們會顯示成代碼。建議先到「已學習的規則」或篩選器把它們改掉或刪掉。`) : null
+    n ? el("p", "warn", `有 ${n} 條規則把商家歸到這一類；刪掉後它們會顯示成代碼。建議先到「自動規則」搜尋這個分類，把它們改掉或刪掉。`) : null
   ], "刪除", () => Store.deleteLabel(l.id));
 }
 
-/* ── 🧠 已學習的規則（清單長，放對話框裡搜尋與刪除） ── */
-function rulesBody(b){
-  add(b, el("p", "note", "「改分類就記住」「以後同商家都不納入」「非訂閱」會記成規則，之後自動套用。這裡可查詢與刪除。"),
-    btn("查看與刪除…", rulesDialog, ""));
-}
-function rulesDialog(){
-  const { body } = dialog("已學習的規則");
+/* ── 🧠 自動規則：自訂的（filter_rules）＋學到的（商家分類／納入排除／非訂閱），同一個搜尋框 ──
+ *  規則會越來越多 → 打字就地篩選（只重畫清單，搜尋框留在原地不掉焦點）；關鍵字記在 MV，改完重畫還在。 */
+const RULES_PAGE = 50;
+function autoRulesBody(b){
   const q = el("input");
-  q.type = "search"; q.placeholder = "搜尋商家／分類";
-  q.setAttribute("aria-label", "搜尋商家或分類");
-  const list = el("div");
-  // 對話框裡留一份自己的清單：刪了就地拿掉，背景再重抓（重抓完的 S 不會回頭蓋掉這裡）
-  let cat = S.catRules.slice(), exc = S.excludeRules.slice(), ign = [...S.subIgnores].sort(), shown = 200;
-  const del = (what, write, drop) => confirmWrite(`刪除${what}？`, ["刪掉後，之後的資料不再套用這條；之前已顯示的數字下次重抓就會跟著變。"],
-    "刪除", write, () => { drop(); draw(); refreshData(); });
-  const draw = () => {
-    const r = E.ruleSearch(cat, exc, q.value, S.labels), qq = q.value.trim().toLowerCase();
-    const ig = ign.filter(p => !qq || p.includes(qq));
-    list.replaceChildren(el("h4", null, `分類規則（${r.cat.length}）`));
-    if (!r.cat.length) list.appendChild(el("p", "muted", "（無）"));
-    for (const x of r.cat.slice(0, shown))
-      list.appendChild(setRow(`${x.merchant} → ${E.labelOf(x.category, S.labels)}`, x.source === "ai" ? "AI 自動" : "手動",
-        btn("刪除", () => del(`分類規則「${x.merchant}」`, () => Store.deleteCatRule(x.id), () => { cat = cat.filter(y => y !== x); }),
-          "link danger", `刪除分類規則 ${x.merchant}`)));
-    if (r.cat.length > shown) list.appendChild(btn(`再顯示 200 條（共 ${r.cat.length} 條）`, () => { shown += 200; draw(); }, ""));
-    list.appendChild(el("h4", null, `排除規則（${r.exc.length}）`));
-    if (!r.exc.length) list.appendChild(el("p", "muted", "（無）"));
-    for (const x of r.exc)
-      list.appendChild(setRow(`${x.pattern} → ${x.exclude_state === "exclude" ? "不納入收支" : "納入收支"}`, x.source === "ai" ? "AI 自動" : "手動",
-        btn("刪除", () => del(`排除規則「${x.pattern}」`, () => Store.deleteExcludeRule(x.id), () => { exc = exc.filter(y => y !== x); }),
-          "link danger", `刪除排除規則 ${x.pattern}`)));
-    list.appendChild(el("h4", null, `非訂閱清單（${ig.length}）`));
-    list.appendChild(el("p", "note", "在分析頁「定期扣款/訂閱」點過「非訂閱」的商家；刪掉＝撤銷（之後又會被自動偵測）。"));
-    if (!ig.length) list.appendChild(el("p", "muted", "（無）"));
-    for (const p of ig)
-      list.appendChild(setRow(`${p} → 不列為訂閱`, null,
-        btn("刪除", () => del(`非訂閱標記「${p}」`, () => Store.deleteSubIgnore(p), () => { ign = ign.filter(y => y !== p); }),
-          "link danger", `撤銷非訂閱 ${p}`)));
-  };
-  q.addEventListener("input", () => { shown = 200; draw(); });
-  add(body, q, list);
-  draw();
-}
-
-/* ── 🎛 篩選器（filter_rules） ── */
-function filtersBody(b){
+  q.type = "search"; q.placeholder = "搜尋規則：商家、關鍵字、分類、帳戶…";
+  q.setAttribute("aria-label", "搜尋自動規則（商家、關鍵字、分類、帳戶、規則名稱）");
+  q.value = MV.ruleQ || "";
   const err = el("p", "warn");
   err.setAttribute("role", "alert");
-  add(b, el("p", "note", "符合條件（關鍵字／帳戶／金額範圍／方向）就自動套用分類或狀態（不納入／納入）。" +
-    "多條依「優先序」小者先套，第一個命中就生效；優先於商家分類／排除規則。"), err);
-  if (!S.filterRules.length) b.appendChild(el("p", "muted", "（尚無篩選器）"));
-  for (const r of S.filterRules.slice().sort(sortBy("priority"))){
-    const on = r.active !== false;
-    const tg = btn(on ? "停用" : "啟用", () => busy(tg, err, () => Store.setFilterActive(r.id, !on)).then(ok => ok && refreshData()),
-      "link", `${on ? "停用" : "啟用"}篩選器 ${r.name || ""}`);
-    const row = setRow((r.name ? `${r.name}：` : "") + E.filterRuleSummary(r, S.labels), `優先序 ${r.priority ?? 100}` + (on ? "" : " · 已停用"),
-      tg, btn("刪除", () => confirmWrite("刪除這條篩選器？", [E.filterRuleSummary(r, S.labels), "刪掉後，符合條件的交易回到一般規則判斷。"],
-        "刪除", () => Store.deleteFilterRule(r.id)), "link danger", `刪除篩選器 ${r.name || ""}`));
-    if (!on) row.classList.add("off");
-    b.appendChild(row);
-  }
-  b.appendChild(btn("新增篩選器", filterDialog, ""));
+  const list = el("div");
+  add(b, el("p", "note", "符合條件就自動分類、排除、算固定或攤提的規則。「自訂的」是你設條件建立的，優先於「學到的」；" +
+      "「學到的」是你在明細選「以後同這家都…」時記下的。"),
+    add(el("div", "searchrow"), q), err, list, btn("新增自訂規則", () => filterDialog(null), ""));
+  const draw = () => {
+    const qq = (MV.ruleQ || "").trim(), lim = MV.ruleShown || RULES_PAGE;
+    const fr = E.filterRuleSearch(S.filterRules.slice().sort(sortBy("priority")), qq, S.labels);
+    const r = E.ruleSearch(S.catRules, S.excludeRules, qq, S.labels);
+    const ig = [...S.subIgnores].sort().filter(p => !qq || p.includes(qq.toLowerCase()));
+    list.replaceChildren();
+    if (qq) list.appendChild(el("p", "muted", `找到 ${fr.length + r.cat.length + r.exc.length + ig.length} 條`));
+    // 搜尋時沒找到的分組整組不畫，清單才短
+    const section = (title, items, rowOf, note) => {
+      if (qq && !items.length) return;
+      list.appendChild(el("h4", null, `${title}（${items.length}）`));
+      if (note && !qq) list.appendChild(el("p", "note", note));
+      if (!items.length){ list.appendChild(el("p", "muted", "（無）")); return; }
+      for (const x of items.slice(0, lim)) list.appendChild(rowOf(x));
+      if (items.length > lim) list.appendChild(btn(`再顯示 ${RULES_PAGE} 條（共 ${items.length} 條）`,
+        () => { MV.ruleShown = lim + RULES_PAGE; draw(); }, ""));
+    };
+    const del = (what, write) => confirmWrite(`刪除${what}？`, ["刪掉後不再自動套用；之前已顯示的數字下次重抓就會跟著變。"], "刪除", write);
+
+    section("自訂的規則", fr, x => {
+      const on = x.active !== false;
+      const tg = btn(on ? "停用" : "啟用", () => busy(tg, err, () => Store.setFilterActive(x.id, !on)).then(ok => ok && refreshData()),
+        "link", `${on ? "停用" : "啟用"}規則 ${x.name || ""}`);
+      const row = setRow((x.name ? `${x.name}：` : "") + E.filterRuleSummary(x, S.labels), `優先序 ${x.priority ?? 100}` + (on ? "" : " · 已停用"),
+        btn("編輯", () => filterDialog(x), "link", `編輯規則 ${x.name || ""}`), tg,
+        btn("刪除", () => del("這條自訂規則", () => Store.deleteFilterRule(x.id)), "link danger", `刪除規則 ${x.name || ""}`));
+      if (!on) row.classList.add("off");
+      return row;
+    }, "依優先序（數字小的先）比對，第一條符合的生效。");
+    section("學到的：商家分類", r.cat, x => setRow(`${x.merchant} → ${E.labelOf(x.category, S.labels)}`, x.source === "ai" ? "AI 自動" : "手動",
+      btn("改分類", () => catRuleDialog(x), "link", `改 ${x.merchant} 的分類`),
+      btn("刪除", () => del(`分類規則「${x.merchant}」`, () => Store.deleteCatRule(x.id)), "link danger", `刪除分類規則 ${x.merchant}`)));
+    section("學到的：納入／不納入", r.exc, x => {
+      const ex = x.exclude_state === "exclude";
+      const flip = btn(ex ? "改成納入" : "改成不納入", () => busy(flip, err, () => Store.setExcludeRule(x.pattern, ex ? "include" : "exclude"))
+        .then(ok => ok && refreshData()), "link", `${x.pattern} ${ex ? "改成納入" : "改成不納入"}收支`);
+      return setRow(`${x.pattern} → ${ex ? "不納入收支" : "納入收支"}`, x.source === "ai" ? "AI 自動" : "手動", flip,
+        btn("刪除", () => del(`排除規則「${x.pattern}」`, () => Store.deleteExcludeRule(x.id)), "link danger", `刪除排除規則 ${x.pattern}`));
+    });
+    section("學到的：非訂閱", ig, p => setRow(`${p} → 不列為訂閱`, null,
+      btn("刪除", () => del(`非訂閱標記「${p}」`, () => Store.deleteSubIgnore(p)), "link danger", `撤銷非訂閱 ${p}`)),
+      "在分析頁「定期扣款/訂閱」點過「非訂閱」的商家；刪掉＝撤銷（之後又會被自動偵測）。");
+  };
+  q.addEventListener("input", () => { MV.ruleQ = q.value; MV.ruleShown = RULES_PAGE; draw(); });
+  draw();
 }
-/** 新增篩選器（App FilterRuleDialog）：至少一個條件才可新增 */
-function filterDialog(){
-  const f = formDialog("新增篩選器", "新增");
+/** 學到的商家分類 → 換一個分類（同一個 RPC：同商家覆寫） */
+function catRuleDialog(x){
+  const f = formDialog(`改分類：${x.merchant}`, "儲存");
+  const opts = E.categoryOptions(S.labels);
+  const cat = select(opts.map(([k, label]) => [label, k]), x.category);
+  add(f.body, field("分類", cat), el("p", "note", "套用到全家、所有月份。"));
+  const check = f.check = () => { f.save.disabled = f.sending || cat.value === x.category; };
+  cat.addEventListener("change", check);
+  check();
+  f.save.addEventListener("click", async () => {
+    if (await f.submit(() => Store.setCategoryRule(x.merchant, cat.value))){ f.d.close(); refreshData(); }
+  });
+}
+/** 新增／編輯自訂規則（App FilterRuleDialog）：至少一個條件才可存。
+ *  明細頁建的特殊動作（固定／消費、攤提、存款轉出用途）這裡沒有對應選項 → 編輯時多一個「維持原本」，條件改了動作不變；
+ *  日期區間（date_from／date_to）這裡不顯示也不送出，編輯不會動到。 */
+function filterDialog(r){
+  const f = formDialog(r ? "編輯自訂規則" : "新增自訂規則", r ? "儲存" : "新增");
   const name = el("input"), kw = el("input"), account = el("input"), amin = el("input"), amax = el("input"), pri = el("input");
   amin.inputMode = amax.inputMode = pri.inputMode = "numeric";
-  pri.value = "100";
-  const dir = select([["全部", "any"], ["支出", "expense"], ["收入", "income"]], "any");
-  const act = select([["設分類", "cat"], ["不納入收支", "exclude"], ["納入收支", "include"]], "cat");
+  const a = r ? String(r.action || "") : "";
+  const special = /^(use|fix|amort):/.test(a);
+  if (r){
+    name.value = r.name || ""; kw.value = r.kw || ""; account.value = r.account || "";
+    amin.value = r.amount_min ?? ""; amax.value = r.amount_max ?? ""; pri.value = r.priority ?? 100;
+  } else pri.value = "100";
+  const dir = select([["全部", "any"], ["支出", "expense"], ["收入", "income"]], r ? r.direction || "any" : "any");
+  const acts = [["設分類", "cat"], ["不納入收支", "exclude"], ["納入收支", "include"]];
+  if (special) acts.unshift([`維持原本：${E.filterRuleSummary(r, S.labels).split("→ ").pop()}`, "keep"]);
+  const act = select(acts, special ? "keep" : a.startsWith("cat:") ? "cat" : a === "exclude" || a === "include" ? a : "cat");
   const opts = E.categoryOptions(S.labels);
-  const cat = select(opts.map(([k, label]) => [label, k]), opts.length ? opts[0][0] : "");
+  const cat = select(opts.map(([k, label]) => [label, k]), a.startsWith("cat:") ? a.slice(4) : opts.length ? opts[0][0] : "");
   const catFld = field("分類", cat);
   add(f.body, field("名稱（可空）", name), field("關鍵字：商家／摘要含", kw), field("帳戶／來源含（可空）", account),
     add(el("div", "rowx"), field("金額 ≥", amin), field("金額 ≤", amax)), field("方向", dir), field("動作", act), catFld,
     field("優先序（小者先，預設 100）", pri));
-  const hasCond = () => [kw, account, amin, amax].some(i => i.value.trim()) || dir.value !== "any";
+  const hasCond = () => [kw, account, amin, amax].some(i => String(i.value).trim()) || dir.value !== "any";
   const check = f.check = () => { catFld.hidden = act.value !== "cat"; f.save.disabled = f.sending || !hasCond(); };
   for (const i of [kw, account, amin, amax]) i.addEventListener("input", check);
   dir.addEventListener("change", check); act.addEventListener("change", check);
   check();
   f.save.addEventListener("click", async () => {
-    const num = (i, what) => { const t = i.value.trim(); if (!t) return null; const v = E.intIn(t, 0, 999999999); if (v == null) throw new Error(`${what}只能填 0 以上的整數，或留空`); return v; };
+    const num = (i, what) => { const t = String(i.value).trim(); if (!t) return null; const v = E.intIn(t, 0, 999999999); if (v == null) throw new Error(`${what}只能填 0 以上的整數，或留空`); return v; };
     let row;
     try {
       const lo = num(amin, "金額下限"), hi = num(amax, "金額上限");
       if (lo != null && hi != null && lo > hi) throw new Error("金額下限不能大於上限");
-      const p = pri.value.trim() ? E.intIn(pri.value, 0, 99999) : 100;
+      const p = String(pri.value).trim() ? E.intIn(pri.value, 0, 99999) : 100;
       if (p == null) throw new Error("優先序只能填 0～99999 的整數");
       row = { name: name.value.trim(), priority: p, kw: kw.value.trim(), account: account.value.trim(), amount_min: lo, amount_max: hi,
-              direction: dir.value, action: act.value === "cat" ? "cat:" + cat.value : act.value };
+              direction: dir.value, action: act.value === "keep" ? a : act.value === "cat" ? "cat:" + cat.value : act.value };
     } catch (e){ f.err.textContent = e.message; return; }
-    if (await f.submit(() => Store.addFilterRule(row))){ f.d.close(); refreshData(); }
+    if (await f.submit(() => (r ? Store.updateFilterRule(r.id, row) : Store.addFilterRule(row)))){ f.d.close(); refreshData(); }
   });
 }
 

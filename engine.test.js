@@ -578,6 +578,20 @@ test("ruleSearch：分類規則比商家或分類名、排除規則比樣式、�
   eq(E.ruleSearch(cr, ex, "SHOP", labels).cat.map(r => r.merchant), ["shopee"]);
   eq(E.ruleSearch(cr, ex, "NetFlix").exc.map(r => r.pattern), ["netflix"]);
 });
+test("filterRuleSearch：比名稱／關鍵字／帳戶／摘要（分類顯示名、動作），不分大小寫、空白＝全部", () => {
+  const labels = [{ key: "📚 教育", label: "📚 才藝教育" }];
+  const fr = [{ id: 1, name: "鋼琴課", kw: "", account: "阿華", amount_min: 3000, amount_max: 3000, action: "cat:📚 教育" },
+              { id: 2, name: "", kw: "Netflix", account: "", action: "exclude" },
+              { id: 3, name: "年繳保險", kw: "國泰人壽", account: "", action: "amort:12" },
+              { id: 4, name: "", kw: "所得稅", account: "", action: "fix:fixed" }];
+  eq(E.filterRuleSearch(fr, " ").length, 4);
+  eq(E.filterRuleSearch(fr, "鋼琴").map(r => r.id), [1], "名稱");
+  eq(E.filterRuleSearch(fr, "NETFLIX").map(r => r.id), [2], "關鍵字不分大小寫");
+  eq(E.filterRuleSearch(fr, "阿華").map(r => r.id), [1], "帳戶");
+  eq(E.filterRuleSearch(fr, "才藝", labels).map(r => r.id), [1], "分類顯示名");
+  eq(E.filterRuleSearch(fr, "攤", labels).map(r => r.id), [3], "動作字樣（攤提）");
+  eq(E.filterRuleSearch(fr, "固定", labels).map(r => r.id), [4], "動作字樣（固定）");
+});
 
 /* ═══ 存款轉出的用途（v95）：優先序、use: 規則分流、偽支出進分析／明細、四個比例 ═══ */
 const useAcct = { ...accA, spend_account: false }, homeAcct = { id: "H", name: "家用(阿華)·活存", spend_account: true };

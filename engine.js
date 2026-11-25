@@ -800,7 +800,7 @@ function tripsByRelevance(t, trips, overrides){
 const FRIENDLY = new Map([["帳戶互轉", "自己帳戶間搬錢"], ["轉帳(進出相抵)", "同帳戶進出相抵"],
   ["自家轉入", "自家帳戶轉入"], ["自家轉入(待配對)", "自家轉入（確認中）"], ["待確認收入", "可能是漏記的收入？"],
   ["信用卡退款/返還", "刷卡退款"], ["退款對消", "退款抵掉原消費"], ["與對帳單重複", "與對帳單重複記到"],
-  ["跨表重複", "與對帳單重複記到"], ["篩選器", "你設的篩選規則"], ["規則排除", "你設的商家規則"],
+  ["跨表重複", "與對帳單重複記到"], ["篩選器", "你設的自訂規則"], ["規則排除", "學到的商家規則"],
   ["手動排除", "你手動排除"], ["投資買入", "買股票（不算花費）"], ["投資賣出", "賣股票（不算收入）"],
   ["轉帳", "轉帳（不算花費）"], ["內部轉帳", "自家帳戶間搬錢"]]);
 function friendlyReason(r){
@@ -1113,6 +1113,12 @@ function ruleSearch(catRules, excludeRules, q, labels = []){
   return { cat: catRules.filter(r => lc(r.merchant).includes(qq) || lc(labelOf(r.category, labels)).includes(qq)),
            exc: excludeRules.filter(r => lc(r.pattern).includes(qq)) };
 }
+/** 自訂規則（filter_rules）的搜尋：比名稱、關鍵字、帳戶，以及一行摘要（含分類名、動作字樣如「固定」「攤提」）；不分大小寫 */
+function filterRuleSearch(filterRules, q, labels = []){
+  const qq = s(q).trim().toLowerCase();
+  if (!qq) return filterRules;
+  return filterRules.filter(r => [r.name, r.kw, r.account, filterRuleSummary(r, labels)].some(x => lc(x).includes(qq)));
+}
 
 const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxAction, tripMemberState, tripSummary,
   tripDistanceDays, tripsByRelevance,
@@ -1124,7 +1130,7 @@ const api = { covers, dayCount, inTrip, tripView, tripAddCandidates, tripTxActio
   findCategory, newCategory, overBudget, dueSoon, detailView, monthCsv, txExclusionFilter, incomeExclusionFilter,
   newestFirst, addDays, nickOf,
   assetGroup, forMember, portfolio, ASSET_GROUPS,
-  normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch,
+  normInviteCode, appPassword, intIn, filterRuleSummary, PARSER_DEFS, parserDef, mailboxFor, sourceKey, hideHash, splitSources, ruleSearch, filterRuleSearch,
   amortInfo, amortSlices, amortize, amortizePeriod, periodFromBulk, monthlySeries, yearlyTotals, amortLabel, amortAction, amortMonth, parseAmort, AMORT_MAX,
   INVEST_CAT, FIXED_CATS, BUCKET_LABEL, fixedInfo, isFixedTx, bucketLabel, fixRuleRow, acctFixRuleRow, acctFixedInfo, acctOutRow, useLabel, isCardFeeText, bankNoteText, acctSpends, acctUseOf, acctRuleKey, acctRuleSource, useRuleRow, financeRatios, missingBuiltins,
   AI_CATS, OTHER, todayIso };

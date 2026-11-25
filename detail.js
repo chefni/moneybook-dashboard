@@ -299,7 +299,7 @@ function drawBank(b, v){
 
 function drawExcluded(b, v){
   const x = v.excluded;
-  b.appendChild(el("p", "note", "不計入收支的：投資買入/轉帳、帳戶互轉/家人互轉/自家轉入/信用卡退款/跨表重複/篩選器、或你手動排除的。點「納入」可改回。" +
+  b.appendChild(el("p", "note", "不計入收支的：投資買入/轉帳、帳戶互轉/家人互轉/自家轉入/信用卡退款/跨表重複/自訂規則、或你手動排除的。點「納入」可改回。" +
     (x.invTotal > 0 ? `　本期投資投入 ${nt(x.invTotal)}` : "")));
   if (!x.count){ b.appendChild(el("p", "muted", "本期沒有不計入收支的項目。")); return; }
   // 投資／轉帳：要改成計入就得改「類型」，所以按鈕開的是完整編輯（App 寫「納入」，其實開的是編輯，§6-18）
@@ -653,7 +653,7 @@ function categorySection(t, d){
   if (!manual){
     const f = E.matchFilterRule(t.merchant, t.note, E.statSource(t), t.amount, t.kind, S.filterRules);
     if (f && String(f.action).startsWith("cat:"))
-      sec.appendChild(el("p", "warn", `這筆由篩選規則「${f.name || "未命名"}」分類，商家規則不會蓋過它。`));
+      sec.appendChild(el("p", "warn", `這筆由自訂規則「${f.name || "未命名"}」分類，學到的商家規則不會蓋過它。要改請到「我的 → 自動規則」。`));
     if (!String(t.merchant || "").trim()){
       sec.appendChild(el("p", "note", "這筆沒有商家名，無法用商家規則；可用上面的「編輯」補上名稱。"));
       return sec;
@@ -724,8 +724,8 @@ function editFields(t){
 /** 「以後同 X 都…」的永久規則對這筆不會照字面生效時，說明原因（可以用就回 null）。
  *  rule＝決定這筆納不納入的篩選規則（優先序在商家排除規則前面，規則蓋不過它）；t＝交易表那一筆（有的話）。 */
 function ruleBlocked(rule, t){
-  if (rule) return `這筆納不納入是由篩選規則「${rule.name || "未命名"}」決定的，商家規則蓋不過它，所以這裡不提供永久規則。` +
-                   "要改這一筆請用下方的「只這一筆」；要改規則本身，請到手機 App 的篩選器。";
+  if (rule) return `這筆納不納入是由自訂規則「${rule.name || "未命名"}」決定的，學到的商家規則蓋不過它，所以這裡不提供永久規則。` +
+                   "要改這一筆請用下方的「只這一筆」；要改規則本身，請到「我的 → 自動規則」。";
   // 記一筆沒寫備註時，名稱就是分類名（如「網購」）：拿它當規則會套到所有名稱含這兩個字的消費
   const c = t && t.source === "manual" && t.category_id && S.cats.find(c => c.id === t.category_id);
   if (c && String(t.merchant || "").trim() === c.name)
@@ -746,7 +746,7 @@ function excludeDialog({ kind, id, state, pattern, excluded, label, blocked = nu
     el("p", "muted", (excluded ? "這筆目前不計入收支。" : "") + (blocked ? ""
       : excluded ? `可只改這一筆，或以後同「${label}」都納入。` : `可只排除這一筆，或以後同「${label}」都自動不納入（會記成規則）。`)),
     rule, blocked ? el("p", "warn", blocked)
-                  : el("p", "note", "永久規則套用到全家、所有月份。要刪除規則目前請到手機 App「我的 → 已學習的規則」。"));
+                  : el("p", "note", "永久規則套用到全家、所有月份。之後要改或刪，請到「我的 → 自動規則」搜尋這個商家。"));
   f.save.addEventListener("click", async () => {
     if (await f.submit(() => Store.setExclude(kind, id, target), others)){ f.d.close(); saved(); }
   });

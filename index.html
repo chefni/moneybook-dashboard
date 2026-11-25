@@ -43,10 +43,10 @@
 <!-- ?v=：deploy.ps1 出貨時換成各檔內容的雜湊。網址一變瀏覽器就不會拿記憶體裡的舊 engine.js 配新頁面。
      detail.js／accounts.js／me.js 用本頁內嵌程式的全域（S、E、Store…）：defer 保證它們在本頁解析完才執行 -->
 <script defer src="classify_data.js?v=becb3e5804"></script>
-<script defer src="engine.js?v=6685cb4f28"></script>
-<script defer src="detail.js?v=f31fed618b"></script>
+<script defer src="engine.js?v=7851496caf"></script>
+<script defer src="detail.js?v=257af59847"></script>
 <script defer src="accounts.js?v=867d9d3fa0"></script>
-<script defer src="me.js?v=2b56110643"></script>
+<script defer src="me.js?v=b24548f61d"></script>
 <style>
   :root {
     --bg:#f5f6fa; --card:#fff; --ink:#2c3e50; --sub:#5b6a79;
@@ -1782,7 +1782,7 @@ function boot(){
   if (DEMO){
     // 示範程式另放 demo.js，只有 ?demo=1 才載入（網址的版本號由 deploy.ps1 換成內容雜湊）
     const d = document.createElement("script");
-    d.src = "demo.js?v=1e25c18ca8";
+    d.src = "demo.js?v=9082a57afc";
     d.onload = () => { Store = DemoStore; buildDemo(); $("demoBadge").hidden = false; applyHeader(); buildChips(); render(); };
     d.onerror = () => showError("無法載入示範資料（demo.js），請重新整理。");
     document.head.appendChild(d);

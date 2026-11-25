@@ -30,7 +30,10 @@ const DemoStore = {
   clearTripTx: async (tripId, txId) => {
     DEMO_DATA.tripTx = DEMO_DATA.tripTx.filter(r => !(r.trip_id === tripId && r.transaction_id === txId));
   },
-  setCategoryRule: async (merchant, category) => { S.catRules = [{ merchant, category, source: "user" }, ...S.catRules]; },
+  setCategoryRule: async (merchant, category) => {   // 同真的 RPC：同商家覆寫（不留舊的那條）
+    const m = merchant.trim().toLowerCase(), old = S.catRules.find(r => r.merchant === m);
+    S.catRules = [{ id: old ? old.id : "c" + Date.now(), merchant: m, category, source: "user" }, ...S.catRules.filter(r => r.merchant !== m)];
+  },
 
   aged: async before => DEMO_DATA.txs.filter(t => t.source === "notification" && t.dedup_status === "unique" &&
     t.occurred_at < before).sort(newestFirst()),
@@ -109,6 +112,7 @@ const DemoStore = {
     S.subIgnores = new Set([...S.subIgnores].filter(x => x !== p));
   },
   addFilterRule: async row => { S.filterRules = [...S.filterRules, { id: "f" + Date.now(), active: true, created_at: new Date().toISOString(), ...row }]; },
+  updateFilterRule: async (id, row) => { demoRow(S.filterRules, id); S.filterRules = S.filterRules.map(r => (r.id === id ? { ...r, ...row } : r)); },
   setFilterActive: async (id, active) => { demoRow(S.filterRules, id); S.filterRules = S.filterRules.map(r => (r.id === id ? { ...r, active } : r)); },
   deleteFilterRule: async id => { demoRow(S.filterRules, id); S.filterRules = S.filterRules.filter(r => r.id !== id); },
   addReminder: async (name, due_day) => { S.reminders = [...S.reminders, { id: "r" + Date.now(), name, due_day, active: true }]; },
